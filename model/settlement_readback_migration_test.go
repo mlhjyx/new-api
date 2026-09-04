@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -154,6 +155,42 @@ func TestSettlementReadbackReadinessRejectsNonUniqueContractIndexes(t *testing.T
 			require.NoError(t, db.Migrator().DropIndex(testCase.dropModel, testCase.indexName))
 			require.NoError(t, db.Exec(testCase.replacement).Error)
 			assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "a same-name non-unique index must not satisfy the contract")
+		})
+	}
+}
+
+func TestSettlementReadbackReadinessRejectsCredentialColumnDrift(t *testing.T) {
+	tests := []struct {
+		name              string
+		lookupDeclaration string
+	}{
+		{name: "wrong type", lookupDeclaration: "TEXT NOT NULL"},
+		{name: "nullable", lookupDeclaration: "VARCHAR(32)"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, err := openSettlementReadbackSQLite("column-drift-" + strings.ReplaceAll(testCase.name, " ", "-"))
+			require.NoError(t, err)
+			require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+			restoreSettlementReadbackTestTopology(t, db, common.DatabaseTypeSQLite)
+			assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+
+			require.NoError(t, db.Exec("ALTER TABLE settlement_readback_credentials RENAME TO settlement_readback_credentials_old").Error)
+			require.NoError(t, db.Exec(`CREATE TABLE settlement_readback_credentials (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				lookup_prefix `+testCase.lookupDeclaration+`,
+				secret_digest CHAR(64) NOT NULL,
+				pepper_version VARCHAR(64) NOT NULL,
+				dispatch_token_id INTEGER NOT NULL,
+				status INTEGER NOT NULL,
+				created_at BIGINT NOT NULL,
+				revoked_at BIGINT NOT NULL DEFAULT 0,
+				rotation_ends_at BIGINT NOT NULL DEFAULT 0
+			)`).Error)
+			require.NoError(t, db.Exec("DROP TABLE settlement_readback_credentials_old").Error)
+			require.NoError(t, db.Exec("CREATE UNIQUE INDEX idx_settlement_readback_credentials_lookup_prefix ON settlement_readback_credentials(lookup_prefix)").Error)
+
+			assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "wrong type or nullability must not satisfy the contract")
 		})
 	}
 }
