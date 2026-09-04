@@ -594,6 +594,64 @@ func TestSettlementPreflightDoesNotReplaceSuffixSelectedChannel(t *testing.T) {
 	assert.Equal(t, 7, linked.ChannelId)
 }
 
+func TestSettlementChatDispatchPlanMatchesActualPassThroughWire(t *testing.T) {
+	tests := []struct {
+		name               string
+		globalPassThrough  bool
+		channelPassThrough bool
+		wantPath           string
+		wantConversion     bool
+	}{
+		{name: "conversion enabled", wantPath: "/v1/responses", wantConversion: true},
+		{name: "global pass-through", globalPassThrough: true, wantPath: "/v1/chat/completions"},
+		{name: "channel pass-through", channelPassThrough: true, wantPath: "/v1/chat/completions"},
+		{name: "both pass-through flags", globalPassThrough: true, channelPassThrough: true, wantPath: "/v1/chat/completions"},
+	}
+
+	for index, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			var physicalWires atomic.Int32
+			var observedPath atomic.Value
+			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				physicalWires.Add(1)
+				observedPath.Store(request.URL.Path)
+				writer.Header().Set("Content-Type", "application/json")
+				if request.URL.Path == "/v1/responses" {
+					_, _ = writer.Write([]byte(settlementResponsesBody("resp-plan")))
+					return
+				}
+				_, _ = writer.Write([]byte(`{"id":"chatcmpl-plan","object":"chat.completion","created":1710000000,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+			}))
+			defer upstream.Close()
+
+			db, engine := newSettlementDispatchIntegrationHarness(t, fmt.Sprintf("dispatch-plan-%d", index), upstream.URL, constant.ChannelTypeOpenAI, "")
+			channelRuntimeSetting := `{"pass_through_body_enabled":false}`
+			if testCase.channelPassThrough {
+				channelRuntimeSetting = `{"pass_through_body_enabled":true}`
+			}
+			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 7).Update("setting", channelRuntimeSetting).Error)
+
+			settings := model_setting.GetGlobalSettings()
+			originalPassThrough := settings.PassThroughRequestEnabled
+			originalPolicy := settings.ChatCompletionsToResponsesPolicy
+			settings.PassThroughRequestEnabled = testCase.globalPassThrough
+			settings.ChatCompletionsToResponsesPolicy = model_setting.ChatCompletionsToResponsesPolicy{Enabled: true, AllChannels: true, ModelPatterns: []string{"^gpt-4o-mini$"}}
+			t.Cleanup(func() {
+				settings.PassThroughRequestEnabled = originalPassThrough
+				settings.ChatCompletionsToResponsesPolicy = originalPolicy
+			})
+
+			response := performSettlementDispatchRequest(engine, http.MethodPost, "/v1/chat/completions", `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`, settlementDispatchOpaque(byte(230+index)), settlementDispatchOpaque(byte(240+index)))
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			assert.EqualValues(t, 1, physicalWires.Load())
+			assert.Equal(t, testCase.wantPath, observedPath.Load())
+			var linked model.Log
+			require.NoError(t, db.Where("settlement_binding_id IS NOT NULL").First(&linked).Error)
+			assert.Equal(t, testCase.wantConversion, strings.Contains(linked.Other, "OpenAI Responses"))
+		})
+	}
+}
+
 func addSettlementFallbackChannel(t *testing.T, db *gorm.DB, fallbackURL string) {
 	t.Helper()
 	priority := int64(0)
