@@ -3,13 +3,13 @@ package controller
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -145,8 +145,8 @@ func TestSettlementReadbackReturnsOnlyExactLinkedReceiptOrPending(t *testing.T) 
 		common.LogConsumeEnabled = originalConsume
 	})
 
-	requestID := strings.Repeat("A", 43)
-	nonce := strings.Repeat("B", 43)
+	requestID := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
+	nonce := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{2}, 32))
 	digest := func(value string) string {
 		sum := sha256.Sum256([]byte(value))
 		return hex.EncodeToString(sum[:])
@@ -183,12 +183,15 @@ func TestSettlementReadbackReturnsOnlyExactLinkedReceiptOrPending(t *testing.T) 
 	context.Request.Header.Set("X-New-API-Settlement-Nonce", nonce)
 	GetSettlementReadback(context)
 	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, settlementReadbackContract, recorder.Header().Get("X-New-API-Settlement-Contract"))
+	assert.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
+	assert.Equal(t, "no-store", recorder.Header().Get("Cache-Control"))
 	assert.JSONEq(t, `{"data":[{"request_id":"`+requestID+`","type":"consume","model_name":"claude-sonnet","channel_id":7,"quota":"1250","prompt_tokens":10,"completion_tokens":20,"usage_semantic":"anthropic","cache_creation_tokens":3,"cache_read_tokens":4,"upstream_id_state":"observed"}]}`, recorder.Body.String())
 	assert.NotContains(t, recorder.Body.String(), "internal-upstream-id")
 	assert.NotContains(t, recorder.Body.String(), "gateway-internal")
 
-	pendingID := strings.Repeat("C", 43)
-	pendingNonce := strings.Repeat("D", 43)
+	pendingID := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{3}, 32))
+	pendingNonce := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))
 	pending := &model.SettlementReadbackBinding{DispatchTokenId: 42, SettlementRequestIdSha256: digest(pendingID), SettlementNonceSha256: digest(pendingNonce), GatewayRequestId: "pending-internal", State: model.SettlementReadbackBindingDispatchStarted, CreatedAt: 3}
 	require.NoError(t, db.Create(pending).Error)
 	pendingRecorder := httptest.NewRecorder()
@@ -199,4 +202,13 @@ func TestSettlementReadbackReturnsOnlyExactLinkedReceiptOrPending(t *testing.T) 
 	GetSettlementReadback(pendingContext)
 	require.Equal(t, http.StatusOK, pendingRecorder.Code)
 	assert.JSONEq(t, `{"data":[]}`, pendingRecorder.Body.String())
+
+	wrongRecorder := httptest.NewRecorder()
+	wrongContext, _ := gin.CreateTestContext(wrongRecorder)
+	wrongContext.Set(middleware.SettlementReadbackDispatchTokenContextKey, 42)
+	wrongContext.Request = httptest.NewRequest(http.MethodGet, "/api/settlement-readback/v1?request_id="+requestID, nil)
+	wrongContext.Request.Header.Set("X-New-API-Settlement-Nonce", pendingNonce)
+	GetSettlementReadback(wrongContext)
+	assert.Equal(t, http.StatusNotFound, wrongRecorder.Code)
+	assert.Empty(t, wrongRecorder.Body.String())
 }

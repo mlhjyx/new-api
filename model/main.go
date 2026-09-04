@@ -306,7 +306,7 @@ func migrateDB() error {
 		return err
 	}
 	if os.Getenv("LOG_SQL_DSN") == "" {
-		if err := migrateSettlementReadbackSharedSchema(DB); err != nil {
+		if err := EnsureSettlementReadbackSharedSchema(DB); err != nil {
 			return fmt.Errorf("failed to migrate settlement readback schema: %v", err)
 		}
 	}
@@ -394,7 +394,7 @@ func migrateDBFast() error {
 		return fmt.Errorf("failed to migrate Log: %v", err)
 	}
 	if os.Getenv("LOG_SQL_DSN") == "" {
-		if err := migrateSettlementReadbackSharedSchema(DB); err != nil {
+		if err := EnsureSettlementReadbackSharedSchema(DB); err != nil {
 			return fmt.Errorf("failed to migrate settlement readback schema: %v", err)
 		}
 	}

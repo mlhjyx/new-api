@@ -213,7 +213,7 @@ func TestSettlementReadbackCapabilityRequiresExactSharedSchema(t *testing.T) {
 
 	require.NoError(t, db.AutoMigrate(&Token{}, &Log{}))
 	assert.False(t, SettlementReadbackRelationalLogTopologyReady())
-	require.NoError(t, migrateSettlementReadbackSharedSchema(db))
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
 	var foreignKeys int
 	require.NoError(t, db.Raw("PRAGMA foreign_keys").Scan(&foreignKeys).Error)
 	assert.Equal(t, 1, foreignKeys)
@@ -242,4 +242,33 @@ func TestSeparateRelationalLogMigrationDoesNotCreateSettlementRelation(t *testin
 	assert.True(t, logDB.Migrator().HasTable(&Log{}))
 	assert.False(t, logDB.Migrator().HasColumn(&Log{}, "SettlementBindingId"))
 	assert.False(t, logDB.Migrator().HasTable(&SettlementReadbackBinding{}))
+}
+
+func TestSettlementReadbackLogLinkFailureRollsBackWithoutChoosingAnotherLog(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-rollback?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	binding := &SettlementReadbackBinding{DispatchTokenId: 9, SettlementRequestIdSha256: strings.Repeat("1", 64), SettlementNonceSha256: strings.Repeat("2", 64), GatewayRequestId: "gateway", State: SettlementReadbackBindingBound, CreatedAt: 1}
+	require.NoError(t, db.Create(binding).Error)
+	require.True(t, BeginSettlementReadbackDispatch(db, binding.Id))
+
+	wrong := &Log{Type: LogTypeConsume, TokenId: 10, SettlementBindingId: &binding.Id, CreatedAt: 2}
+	assert.Error(t, LinkSettlementReadbackConsumeLog(db, binding.Id, wrong))
+	var stored SettlementReadbackBinding
+	require.NoError(t, db.First(&stored, binding.Id).Error)
+	assert.Equal(t, SettlementReadbackBindingDispatchStarted, stored.State)
+	var count int64
+	require.NoError(t, db.Model(&Log{}).Where("settlement_binding_id = ?", binding.Id).Count(&count).Error)
+	assert.Zero(t, count)
+
+	valid := &Log{Type: LogTypeConsume, TokenId: 9, SettlementBindingId: &binding.Id, CreatedAt: 3}
+	require.NoError(t, LinkSettlementReadbackConsumeLog(db, binding.Id, valid))
+	duplicate := &Log{Type: LogTypeConsume, TokenId: 9, SettlementBindingId: &binding.Id, CreatedAt: 4}
+	assert.Error(t, LinkSettlementReadbackConsumeLog(db, binding.Id, duplicate))
+	require.NoError(t, db.Model(&Log{}).Where("settlement_binding_id = ?", binding.Id).Count(&count).Error)
+	assert.EqualValues(t, 1, count)
+
+	missingBindingID := binding.Id + 10_000
+	orphan := &Log{Type: LogTypeConsume, TokenId: 9, SettlementBindingId: &missingBindingID, CreatedAt: 5}
+	assert.Error(t, db.Create(orphan).Error)
 }

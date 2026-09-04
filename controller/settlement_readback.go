@@ -1,16 +1,24 @@
 package controller
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"regexp"
 	"strconv"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 const settlementReadbackContract = "new-api-settlement-readback/v1"
@@ -21,6 +29,7 @@ var settlementReadbackAdminIntegerBodies = map[string]*regexp.Regexp{
 	"dispatch_token_id": regexp.MustCompile(`^\{[ \t\r\n]*"dispatch_token_id"[ \t\r\n]*:[ \t\r\n]*([1-9][0-9]{0,9})[ \t\r\n]*\}$`),
 	"overlap_seconds":   regexp.MustCompile(`^\{[ \t\r\n]*"overlap_seconds"[ \t\r\n]*:[ \t\r\n]*([1-9][0-9]{0,9})[ \t\r\n]*\}$`),
 }
+var settlementReadbackModelIdentifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`)
 
 type settlementReadbackCapabilityResponse struct {
 	SchemaVersion string `json:"schema_version"`
@@ -35,6 +44,20 @@ type settlementReadbackCredentialDelivery struct {
 	PepperVersion   string `json:"pepper_version"`
 	DispatchTokenID int    `json:"dispatch_token_id"`
 	RotationEndsAt  int64  `json:"rotation_ends_at"`
+}
+
+type settlementReadbackReceipt struct {
+	RequestID           string `json:"request_id"`
+	Type                string `json:"type"`
+	ModelName           string `json:"model_name"`
+	ChannelID           int    `json:"channel_id"`
+	Quota               string `json:"quota"`
+	PromptTokens        int64  `json:"prompt_tokens"`
+	CompletionTokens    int64  `json:"completion_tokens"`
+	UsageSemantic       string `json:"usage_semantic"`
+	CacheCreationTokens int64  `json:"cache_creation_tokens"`
+	CacheReadTokens     int64  `json:"cache_read_tokens"`
+	UpstreamIDState     string `json:"upstream_id_state"`
 }
 
 func settlementReadbackAdminInteger(c *gin.Context, key string) (int64, bool) {
@@ -163,9 +186,100 @@ func GetSettlementReadbackCapability(c *gin.Context) {
 }
 
 func GetSettlementReadback(c *gin.Context) {
-	// The exact receipt route is intentionally unavailable until Phase B has a
-	// transactional binding-to-consume-log relation. It must never fall back to
-	// the token-wide legacy log endpoint.
 	writeSettlementReadbackHeaders(c)
-	c.AbortWithStatus(http.StatusServiceUnavailable)
+	if !model.SettlementReadbackRelationalLogTopologyReady() {
+		c.AbortWithStatus(http.StatusServiceUnavailable)
+		return
+	}
+	requestValues, present := c.Request.URL.Query()["request_id"]
+	nonceValues := c.Request.Header.Values("X-New-API-Settlement-Nonce")
+	if !present || len(requestValues) != 1 || len(nonceValues) != 1 || !settlementReadbackOpaqueValue(requestValues[0]) || !settlementReadbackOpaqueValue(nonceValues[0]) {
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+	dispatchTokenID := c.GetInt(middleware.SettlementReadbackDispatchTokenContextKey)
+	log, pending, err := model.FindSettlementReadbackConsumeLog(
+		model.DB,
+		dispatchTokenID,
+		settlementReadbackValueDigest(requestValues[0]),
+		settlementReadbackValueDigest(nonceValues[0]),
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			c.AbortWithStatus(http.StatusNotFound)
+		case model.IsSettlementReadbackIntegrityError(err):
+			c.AbortWithStatus(http.StatusConflict)
+		default:
+			c.AbortWithStatus(http.StatusServiceUnavailable)
+		}
+		return
+	}
+	if pending {
+		c.JSON(http.StatusOK, gin.H{"data": []settlementReadbackReceipt{}})
+		return
+	}
+	receipt, ok := settlementReadbackClosedReceipt(requestValues[0], log)
+	if !ok {
+		c.AbortWithStatus(http.StatusConflict)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": []settlementReadbackReceipt{receipt}})
+}
+
+func settlementReadbackOpaqueValue(value string) bool {
+	if len(value) != 43 {
+		return false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	return err == nil && len(decoded) == 32 && base64.RawURLEncoding.EncodeToString(decoded) == value
+}
+
+func settlementReadbackValueDigest(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:])
+}
+
+func settlementReadbackNonnegativeInteger(value interface{}) (int64, bool) {
+	number, ok := value.(float64)
+	if !ok || number < 0 || number > math.MaxInt64 || number != math.Trunc(number) {
+		return 0, false
+	}
+	return int64(number), true
+}
+
+func settlementReadbackClosedReceipt(requestID string, log *model.Log) (settlementReadbackReceipt, bool) {
+	if log == nil || log.Type != model.LogTypeConsume || log.ChannelId < 1 || log.Quota < 0 || log.PromptTokens < 0 || log.CompletionTokens < 0 || len(log.ModelName) < 1 || len(log.ModelName) > 191 || !settlementReadbackModelIdentifier.MatchString(log.ModelName) {
+		return settlementReadbackReceipt{}, false
+	}
+	var other map[string]interface{}
+	if err := common.Unmarshal([]byte(log.Other), &other); err != nil {
+		return settlementReadbackReceipt{}, false
+	}
+	usageSemantic, ok := other["usage_semantic"].(string)
+	if !ok || (usageSemantic != "openai" && usageSemantic != "anthropic") {
+		return settlementReadbackReceipt{}, false
+	}
+	cacheCreation, creationOK := settlementReadbackNonnegativeInteger(other["cache_creation_tokens"])
+	cacheRead, readOK := settlementReadbackNonnegativeInteger(other["cache_tokens"])
+	if !creationOK || !readOK {
+		return settlementReadbackReceipt{}, false
+	}
+	upstreamState := "absent"
+	if log.UpstreamRequestId != "" {
+		upstreamState = "observed"
+	}
+	return settlementReadbackReceipt{
+		RequestID:           requestID,
+		Type:                "consume",
+		ModelName:           log.ModelName,
+		ChannelID:           log.ChannelId,
+		Quota:               strconv.FormatInt(int64(log.Quota), 10),
+		PromptTokens:        int64(log.PromptTokens),
+		CompletionTokens:    int64(log.CompletionTokens),
+		UsageSemantic:       usageSemantic,
+		CacheCreationTokens: cacheCreation,
+		CacheReadTokens:     cacheRead,
+		UpstreamIDState:     upstreamState,
+	}, true
 }

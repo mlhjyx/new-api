@@ -38,10 +38,15 @@ const (
 )
 
 var errSettlementReadbackCredentialInvalid = errors.New("invalid settlement readback credential")
+var errSettlementReadbackIntegrity = errors.New("settlement readback integrity invalid")
 var settlementReadbackPepperVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$`)
 
 func IsSettlementReadbackCredentialInvalid(err error) bool {
 	return errors.Is(err, errSettlementReadbackCredentialInvalid)
+}
+
+func IsSettlementReadbackIntegrityError(err error) bool {
+	return errors.Is(err, errSettlementReadbackIntegrity)
 }
 
 type SettlementReadbackPepperKeyring struct {
@@ -176,7 +181,7 @@ type settlementReadbackLinkedLog struct {
 
 func (settlementReadbackLinkedLog) TableName() string { return "logs" }
 
-func migrateSettlementReadbackSharedSchema(db *gorm.DB) error {
+func EnsureSettlementReadbackSharedSchema(db *gorm.DB) error {
 	if db == nil {
 		return errSettlementReadbackCredentialInvalid
 	}
@@ -458,6 +463,9 @@ func LinkSettlementReadbackConsumeLog(db *gorm.DB, bindingID int, log *Log) erro
 }
 
 func FindSettlementReadbackConsumeLog(db *gorm.DB, tokenID int, requestDigest string, nonceDigest string) (*Log, bool, error) {
+	if db == nil || tokenID < 1 || len(requestDigest) != settlementReadbackDigestHexLength || len(nonceDigest) != settlementReadbackDigestHexLength {
+		return nil, false, errSettlementReadbackCredentialInvalid
+	}
 	var binding SettlementReadbackBinding
 	if err := db.Where("dispatch_token_id = ? AND settlement_request_id_sha256 = ? AND settlement_nonce_sha256 = ?", tokenID, requestDigest, nonceDigest).First(&binding).Error; err != nil {
 		return nil, false, err
@@ -466,13 +474,16 @@ func FindSettlementReadbackConsumeLog(db *gorm.DB, tokenID int, requestDigest st
 		return nil, true, nil
 	}
 	if binding.State != SettlementReadbackBindingLogLinked {
-		return nil, false, errSettlementReadbackCredentialInvalid
+		return nil, false, errSettlementReadbackIntegrity
 	}
-	var log Log
-	if err := db.Where("settlement_binding_id = ? AND token_id = ? AND type = ?", binding.Id, tokenID, LogTypeConsume).First(&log).Error; err != nil {
+	var logs []Log
+	if err := db.Where("settlement_binding_id = ? AND token_id = ? AND type = ?", binding.Id, tokenID, LogTypeConsume).Limit(2).Find(&logs).Error; err != nil {
 		return nil, false, err
 	}
-	return &log, false, nil
+	if len(logs) != 1 {
+		return nil, false, errSettlementReadbackIntegrity
+	}
+	return &logs[0], false, nil
 }
 
 // SettlementReadbackRelationalLogTopologyReady is intentionally strict: a
