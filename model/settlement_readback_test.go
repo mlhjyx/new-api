@@ -98,3 +98,74 @@ func TestSettlementReadbackBindingCasAndExactLinkedLog(t *testing.T) {
 	require.NotNil(t, receipt)
 	assert.Equal(t, binding.Id, *receipt.SettlementBindingId)
 }
+
+func TestSettlementReadbackPepperKeyringIsVersionedAndClosed(t *testing.T) {
+	keyring, err := ParseSettlementReadbackPepperKeyring([]byte(strings.Join([]string{
+		"schema=settlement-readback-pepper-keyring/v1",
+		"pepper-v2 ACTIVE AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"pepper-v1 VERIFY_ONLY BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+		"",
+	}, "\n")))
+	require.NoError(t, err)
+	version, pepper, ok := keyring.Active()
+	assert.True(t, ok)
+	assert.Equal(t, "pepper-v2", version)
+	assert.Len(t, pepper, settlementReadbackSecretBytes)
+	_, oldPepper, ok := keyring.Lookup("pepper-v1")
+	assert.True(t, ok)
+	assert.Len(t, oldPepper, settlementReadbackSecretBytes)
+
+	for name, raw := range map[string]string{
+		"duplicate version": "schema=settlement-readback-pepper-keyring/v1\npepper-v1 ACTIVE AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\npepper-v1 VERIFY_ONLY BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n",
+		"two active":        "schema=settlement-readback-pepper-keyring/v1\npepper-v1 ACTIVE AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\npepper-v2 ACTIVE BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n",
+		"invalid secret":    "schema=settlement-readback-pepper-keyring/v1\npepper-v1 ACTIVE padded=====================================\n",
+		"unknown status":    "schema=settlement-readback-pepper-keyring/v1\npepper-v1 RETIRED AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseSettlementReadbackPepperKeyring([]byte(raw))
+			assert.Error(t, err)
+		})
+	}
+}
+
+func TestSettlementReadbackCredentialLifecycleEnforcesRotationAndRevocation(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-lifecycle?mode=memory&cache=shared&_foreign_keys=on"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&Token{}, &SettlementReadbackCredential{}, &SettlementReadbackBinding{}))
+	require.NoError(t, db.Create(&Token{Id: 42, UserId: 7, Key: "lifecycle-test-token", Status: common.TokenStatusEnabled}).Error)
+	keyring, err := ParseSettlementReadbackPepperKeyring([]byte(strings.Join([]string{
+		"schema=settlement-readback-pepper-keyring/v1",
+		"pepper-v2 ACTIVE AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"pepper-v1 VERIFY_ONLY BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+		"",
+	}, "\n")))
+	require.NoError(t, err)
+	const now int64 = 2_000_000_000
+
+	first, firstSecret, err := CreateSettlementReadbackCredential(db, 42, keyring, now)
+	require.NoError(t, err)
+	assert.NotEmpty(t, firstSecret)
+	assert.Equal(t, "pepper-v2", first.PepperVersion)
+	_, _, err = CreateSettlementReadbackCredential(db, 42, keyring, now)
+	assert.Error(t, err)
+
+	second, secondSecret, err := RotateSettlementReadbackCredential(db, first.Id, 300, keyring, now+1)
+	require.NoError(t, err)
+	assert.NotEmpty(t, secondSecret)
+	assert.NotEqual(t, firstSecret, secondSecret)
+	assert.True(t, SettlementReadbackCredentialUsableAt(first, now+300))
+	assert.False(t, SettlementReadbackCredentialUsableAt(first, now+301))
+	_, _, err = RotateSettlementReadbackCredential(db, second.Id, 300, keyring, now+2)
+	assert.Error(t, err, "a dispatch token may have at most two overlapping readers")
+
+	replayed, err := RevokeSettlementReadbackCredential(db, second.Id, now+3)
+	require.NoError(t, err)
+	assert.False(t, replayed)
+	replayed, err = RevokeSettlementReadbackCredential(db, second.Id, now+4)
+	require.NoError(t, err)
+	assert.True(t, replayed)
+	var stored SettlementReadbackCredential
+	require.NoError(t, db.First(&stored, second.Id).Error)
+	assert.Equal(t, SettlementReadbackCredentialRevoked, stored.Status)
+	assert.Equal(t, now+3, stored.RevokedAt)
+}
