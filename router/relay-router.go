@@ -1,6 +1,8 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
@@ -10,13 +12,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func rejectNonCanonicalRelayPath(c *gin.Context) {
+	c.AbortWithStatus(http.StatusNotFound)
+}
+
 func SetRelayRouter(router *gin.Engine) {
-	// Relay paths are capability boundaries. Gin's default trailing-slash
-	// redirect runs before route middleware, so it could redirect a malformed
-	// settlement-bound request without TokenAuth evaluating its exact path.
-	router.RedirectTrailingSlash = false
-	router.RedirectFixedPath = false
-	router.RemoveExtraSlash = false
 	router.Use(middleware.CORS())
 	router.Use(middleware.DecompressRequestMiddleware())
 	router.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
@@ -77,6 +77,12 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
 	relayV1Router.Use(middleware.TokenAuth())
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
+	// Gin redirects trailing slashes before route middleware. Register exact
+	// rejection routes so bound dispatch tokens still cross TokenAuth and can
+	// never be redirected into one of the three settlement-capable paths.
+	relayV1Router.POST("/chat/completions/", rejectNonCanonicalRelayPath)
+	relayV1Router.POST("/responses/", rejectNonCanonicalRelayPath)
+	relayV1Router.POST("/messages/", rejectNonCanonicalRelayPath)
 	{
 		// WebSocket 路由（统一到 Relay）
 		wsRouter := relayV1Router.Group("")
