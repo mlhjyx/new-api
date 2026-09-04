@@ -64,13 +64,13 @@ func runSettlementReadbackExternalOwnershipGuardTest(
 	require.NoError(t, owned.Exec("DROP TABLE settlement_readback_unrelated_preexisting_object").Error)
 	require.NoError(t, validateSettlementReadbackExternalOwnership(owned, databaseType, ownershipID, ack))
 	require.NoError(t, owned.Exec(`ALTER TABLE settlement_readback_test_ownership
-		ADD CONSTRAINT settlement_readback_unrelated_check CHECK (run_id <> '')`).Error)
+		ADD CONSTRAINT settlement_readback_unrelated_unique UNIQUE (run_id, dialect)`).Error)
 	assert.Error(t, validateSettlementReadbackExternalOwnership(owned, databaseType, ownershipID, ack),
 		"complete database inventory must reject an unrelated constraint")
 	if databaseType == common.DatabaseTypeMySQL {
-		require.NoError(t, owned.Exec("ALTER TABLE settlement_readback_test_ownership DROP CHECK settlement_readback_unrelated_check").Error)
+		require.NoError(t, owned.Exec("ALTER TABLE settlement_readback_test_ownership DROP INDEX settlement_readback_unrelated_unique").Error)
 	} else {
-		require.NoError(t, owned.Exec("ALTER TABLE settlement_readback_test_ownership DROP CONSTRAINT settlement_readback_unrelated_check").Error)
+		require.NoError(t, owned.Exec("ALTER TABLE settlement_readback_test_ownership DROP CONSTRAINT settlement_readback_unrelated_unique").Error)
 	}
 	require.NoError(t, validateSettlementReadbackExternalOwnership(owned, databaseType, ownershipID, ack))
 	if databaseType == common.DatabaseTypePostgreSQL {
