@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,46 +15,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// legacySettlementReadbackLog is the pre-readback operational log shape. The
-// migration contract is additive: existing rows and values must survive while
-// settlement_binding_id is introduced as nullable.
-type legacySettlementReadbackLog struct {
-	Id                int   `gorm:"primaryKey"`
-	UserId            int   `gorm:"index"`
-	CreatedAt         int64 `gorm:"bigint"`
-	Type              int
-	Content           string
-	Username          string
-	TokenName         string
-	ModelName         string
-	Quota             int
-	PromptTokens      int
-	CompletionTokens  int
-	ChannelId         int
-	TokenId           int
-	RequestId         string
-	UpstreamRequestId string
-	Other             string
-}
-
-func (legacySettlementReadbackLog) TableName() string { return "logs" }
-
 func TestLegacySettlementReadbackFixtureCoversExactBaseLogManifest(t *testing.T) {
-	db, err := openSettlementReadbackSQLite("legacy-fixture-manifest-red")
+	db, err := openSettlementReadbackSQLite("legacy-fixture-manifest")
 	require.NoError(t, err)
-	statement := &gorm.Statement{DB: db}
-	require.NoError(t, statement.Parse(&legacySettlementReadbackLog{}))
-	require.NotNil(t, statement.Schema)
-	actualColumns := make([]string, 0, len(statement.Schema.Fields))
-	for _, field := range statement.Schema.Fields {
-		actualColumns = append(actualColumns, field.DBName)
-	}
-	assert.Equal(t, []string{
-		"id", "user_id", "created_at", "type", "content", "username", "token_name",
-		"model_name", "quota", "prompt_tokens", "completion_tokens", "use_time",
-		"is_stream", "channel_id", "channel_name", "token_id", "group", "ip",
-		"request_id", "upstream_request_id", "other",
-	}, actualColumns, "the legacy fixture must cover every column in bde9b2f:model/log.go")
+	createSettlementReadbackLegacyLogFixture(t, db, common.DatabaseTypeSQLite)
 }
 
 func TestSettlementReadbackSQLiteEnablesForeignKeysOnEveryPooledConnection(t *testing.T) {
@@ -96,37 +59,7 @@ func TestSettlementReadbackSQLiteEnablesForeignKeysOnEveryPooledConnection(t *te
 func TestSettlementReadbackMigrationPreservesPopulatedLegacyLogs(t *testing.T) {
 	db, err := openSettlementReadbackSQLite("legacy-forward-upgrade")
 	require.NoError(t, err)
-
-	require.NoError(t, db.AutoMigrate(&legacySettlementReadbackLog{}))
-	legacyRows := []legacySettlementReadbackLog{
-		{
-			Id: 1, UserId: 10, CreatedAt: 1_700_000_001, Type: LogTypeConsume,
-			Content: "legacy content one", Username: "legacy-user", TokenName: "legacy-token",
-			ModelName: "legacy-model", Quota: 42, PromptTokens: 7, CompletionTokens: 9,
-			ChannelId: 3, TokenId: 11, RequestId: "legacy-request-1",
-			UpstreamRequestId: "legacy-upstream-1", Other: `{"legacy":true}`,
-		},
-		{
-			Id: 2, UserId: 20, CreatedAt: 1_700_000_002, Type: LogTypeError,
-			Content: "legacy content two", Username: "second-user", TokenName: "second-token",
-			ModelName: "second-model", Quota: math.MaxInt32, PromptTokens: 100, CompletionTokens: 200,
-			ChannelId: 4, TokenId: 12, RequestId: "legacy-request-2",
-			UpstreamRequestId: "", Other: `{"legacy":"preserve"}`,
-		},
-	}
-	require.NoError(t, db.Create(&legacyRows).Error)
-
-	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
-
-	var migrated []legacySettlementReadbackLog
-	require.NoError(t, db.Order("id ASC").Find(&migrated).Error)
-	assert.Equal(t, legacyRows, migrated)
-
-	for _, row := range legacyRows {
-		var settlementBindingID *int
-		require.NoError(t, db.Raw("SELECT settlement_binding_id FROM logs WHERE id = ?", row.Id).Scan(&settlementBindingID).Error)
-		assert.Nil(t, settlementBindingID)
-	}
+	assertSettlementReadbackLegacyMigration(t, db, common.DatabaseTypeSQLite)
 }
 
 func TestSettlementReadbackReadinessRejectsNonUniqueContractIndexes(t *testing.T) {

@@ -281,23 +281,8 @@ func runSettlementReadbackPhaseDContract(t *testing.T, db *gorm.DB, databaseType
 	sqlDB.SetMaxOpenConns(24)
 	sqlDB.SetMaxIdleConns(24)
 
-	legacyRows := []legacySettlementReadbackLog{
-		{Id: 101, UserId: 7, CreatedAt: 1_700_000_101, Type: LogTypeConsume, Content: "legacy-one", Username: "user-one", TokenName: "token-one", ModelName: "model-one", Quota: 17, PromptTokens: 19, CompletionTokens: 23, ChannelId: 29, TokenId: 31, RequestId: "request-one", UpstreamRequestId: "upstream-one", Other: `{"legacy":1}`},
-		{Id: 102, UserId: 8, CreatedAt: 1_700_000_102, Type: LogTypeError, Content: "legacy-two", Username: "user-two", TokenName: "token-two", ModelName: "model-two", Quota: 37, PromptTokens: 41, CompletionTokens: 43, ChannelId: 47, TokenId: 53, RequestId: "request-two", UpstreamRequestId: "", Other: `{"legacy":2}`},
-	}
-	require.NoError(t, db.AutoMigrate(&legacySettlementReadbackLog{}))
-	require.NoError(t, db.Create(&legacyRows).Error)
-
-	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
-	restoreSettlementReadbackTestTopology(t, db, databaseType)
+	assertSettlementReadbackLegacyMigration(t, db, databaseType)
 	assert.True(t, SettlementReadbackRelationalLogTopologyReady())
-
-	var migrated []legacySettlementReadbackLog
-	require.NoError(t, db.Order("id ASC").Find(&migrated).Error)
-	assert.Equal(t, legacyRows, migrated)
-	var nullLegacyLinks int64
-	require.NoError(t, db.Model(&Log{}).Where("id IN ? AND settlement_binding_id IS NULL", []int{101, 102}).Count(&nullLegacyLinks).Error)
-	assert.EqualValues(t, 2, nullLegacyLinks)
 
 	assertSettlementReadbackPhaseDSchema(t, db, databaseType)
 	assertSettlementReadbackPhaseDUniqueness(t, db)
