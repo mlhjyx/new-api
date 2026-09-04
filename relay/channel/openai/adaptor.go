@@ -47,7 +47,11 @@ func (a *Adaptor) SettlementDispatchFence(c *gin.Context, info *relaycommon.Rela
 	}
 	switch c.Request.URL.Path {
 	case "/v1/chat/completions":
-		if service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
+		dispatchPlan, frozen := service.FrozenChatCompletionsDispatchPlan(info)
+		if !frozen {
+			return ""
+		}
+		if dispatchPlan == service.ChatCompletionsDispatchResponses {
 			if info.IsStream {
 				return channel.SettlementDispatchFenceOpenAIChatViaResponsesStream
 			}

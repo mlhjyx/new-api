@@ -7,6 +7,7 @@ import (
 	rootcommon "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
@@ -46,6 +47,7 @@ func ValidateSettlementDispatchPreflight(c *gin.Context, info *relaycommon.Relay
 	probe.ChannelMeta = nil
 	probe.SettlementDispatchFence = ""
 	probe.InitChannelMeta(c)
+	service.FreezeChatCompletionsDispatchPlan(&probe)
 	adaptor := GetAdaptor(probe.ApiType)
 	if fenceError := requireSettlementDispatchFence(c, &probe, adaptor); fenceError != nil {
 		return fenceError

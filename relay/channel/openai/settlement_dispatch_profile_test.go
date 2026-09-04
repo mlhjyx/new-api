@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -33,12 +34,13 @@ func TestSettlementDispatchFenceMatchesActualPassThroughPlan(t *testing.T) {
 		name               string
 		globalPassThrough  bool
 		channelPassThrough bool
+		wantPlan           service.ChatCompletionsDispatchPlan
 		want               channel.SettlementDispatchFence
 	}{
-		{name: "conversion enabled", want: channel.SettlementDispatchFenceOpenAIChatViaResponses},
-		{name: "global pass-through forces direct", globalPassThrough: true, want: channel.SettlementDispatchFenceOpenAIChat},
-		{name: "channel pass-through forces direct", channelPassThrough: true, want: channel.SettlementDispatchFenceOpenAIChat},
-		{name: "both pass-through flags force direct", globalPassThrough: true, channelPassThrough: true, want: channel.SettlementDispatchFenceOpenAIChat},
+		{name: "conversion enabled", wantPlan: service.ChatCompletionsDispatchResponses, want: channel.SettlementDispatchFenceOpenAIChatViaResponses},
+		{name: "global pass-through forces direct", globalPassThrough: true, wantPlan: service.ChatCompletionsDispatchDirect, want: channel.SettlementDispatchFenceOpenAIChat},
+		{name: "channel pass-through forces direct", channelPassThrough: true, wantPlan: service.ChatCompletionsDispatchDirect, want: channel.SettlementDispatchFenceOpenAIChat},
+		{name: "both pass-through flags force direct", globalPassThrough: true, channelPassThrough: true, wantPlan: service.ChatCompletionsDispatchDirect, want: channel.SettlementDispatchFenceOpenAIChat},
 	}
 
 	for _, testCase := range tests {
@@ -60,6 +62,7 @@ func TestSettlementDispatchFenceMatchesActualPassThroughPlan(t *testing.T) {
 				},
 			}
 
+			assert.Equal(t, testCase.wantPlan, service.FreezeChatCompletionsDispatchPlan(info))
 			assert.Equal(t, testCase.want, (&Adaptor{}).SettlementDispatchFence(context, info))
 		})
 	}

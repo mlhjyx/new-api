@@ -150,6 +150,9 @@ type RelayInfo struct {
 	// names the exact adapter/variant/converter profile allowed to reach the
 	// common no-redirect physical send seam.
 	SettlementDispatchFence string
+	// ChatCompletionsDispatchPlan is resolved once per selected channel before
+	// settlement profile admission and consumed by the actual handler branch.
+	ChatCompletionsDispatchPlan string
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.
 	SubscriptionAmountTotal               int64
 	SubscriptionAmountUsedAfterPreConsume int64
