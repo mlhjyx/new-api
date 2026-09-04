@@ -1,12 +1,15 @@
 package model
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -325,4 +328,32 @@ func TestCreateSettlementReadbackBindingIsExactAndPreDispatchIdempotent(t *testi
 	require.True(t, BeginSettlementReadbackDispatch(db, binding.Id))
 	_, _, err = CreateOrGetSettlementReadbackBinding(db, 42, requestDigest, nonceDigest, "gateway-request")
 	assert.Error(t, err, "a started physical wire can only use readback")
+}
+
+func TestRecordConsumeLogLinksTheFrozenSettlementBinding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open("file:settlement-record-consume?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	originalDB, originalLogDB := DB, LOG_DB
+	originalConsume, originalExport := common.LogConsumeEnabled, common.DataExportEnabled
+	DB, LOG_DB = db, db
+	common.LogConsumeEnabled = true
+	common.DataExportEnabled = false
+	t.Cleanup(func() {
+		DB, LOG_DB = originalDB, originalLogDB
+		common.LogConsumeEnabled, common.DataExportEnabled = originalConsume, originalExport
+	})
+	binding := &SettlementReadbackBinding{DispatchTokenId: 42, SettlementRequestIdSha256: strings.Repeat("9", 64), SettlementNonceSha256: strings.Repeat("a", 64), GatewayRequestId: "gateway-request", State: SettlementReadbackBindingDispatchStarted, CreatedAt: 1}
+	require.NoError(t, db.Create(binding).Error)
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	RecordConsumeLog(context, 7, RecordConsumeLogParams{ChannelId: 3, PromptTokens: 10, CompletionTokens: 2, ModelName: "model-v1", TokenName: "redacted", Quota: 12, TokenId: 42, Other: map[string]interface{}{"usage_semantic": "anthropic", "cache_creation_tokens": 0, "cache_tokens": 0}, SettlementBindingId: binding.Id})
+	var stored SettlementReadbackBinding
+	require.NoError(t, db.First(&stored, binding.Id).Error)
+	assert.Equal(t, SettlementReadbackBindingLogLinked, stored.State)
+	var logs []Log
+	require.NoError(t, db.Where("settlement_binding_id = ?", binding.Id).Find(&logs).Error)
+	require.Len(t, logs, 1)
+	assert.Equal(t, LogTypeConsume, logs[0].Type)
 }

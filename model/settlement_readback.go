@@ -35,6 +35,7 @@ const (
 	settlementReadbackMaximumPepperKeys            = 3
 	settlementReadbackMaximumKeyringBytes          = 4096
 	settlementReadbackMaximumRotationSeconds int64 = 600
+	SettlementReadbackBindingContextKey            = common.SettlementReadbackBindingIdKey
 )
 
 var errSettlementReadbackCredentialInvalid = errors.New("invalid settlement readback credential")
@@ -395,6 +396,18 @@ func settlementReadbackCredentialParts(secret string) (string, bool) {
 	return parts[1], true
 }
 
+func SettlementReadbackOpaqueDigest(value string) (string, bool) {
+	if len(value) != settlementReadbackSecretPartLength {
+		return "", false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil || len(decoded) != settlementReadbackSecretBytes || base64.RawURLEncoding.EncodeToString(decoded) != value {
+		return "", false
+	}
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:]), true
+}
+
 func GetActiveSettlementReadbackCredential(secret string, pepper string) (*SettlementReadbackCredential, error) {
 	lookupPrefix, ok := settlementReadbackCredentialParts(secret)
 	if !ok || strings.TrimSpace(pepper) == "" {
@@ -430,7 +443,7 @@ func GetUsableSettlementReadbackCredential(secret string, keyring *SettlementRea
 }
 
 func HasActiveSettlementReadbackCredential(dispatchTokenID int) (bool, error) {
-	if dispatchTokenID < 1 {
+	if DB == nil || dispatchTokenID < 1 {
 		return false, errSettlementReadbackCredentialInvalid
 	}
 	var count int64
@@ -488,6 +501,9 @@ func CreateOrGetSettlementReadbackBinding(db *gorm.DB, dispatchTokenID int, requ
 }
 
 func BeginSettlementReadbackDispatch(db *gorm.DB, bindingID int) bool {
+	if db == nil || bindingID < 1 {
+		return false
+	}
 	result := db.Model(&SettlementReadbackBinding{}).Where("id = ? AND state = ?", bindingID, SettlementReadbackBindingBound).Update("state", SettlementReadbackBindingDispatchStarted)
 	return result.Error == nil && result.RowsAffected == 1
 }

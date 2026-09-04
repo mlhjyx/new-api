@@ -1,9 +1,6 @@
 package controller
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -12,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 
@@ -192,8 +190,14 @@ func GetSettlementReadback(c *gin.Context) {
 		return
 	}
 	requestValues, present := c.Request.URL.Query()["request_id"]
-	nonceValues := c.Request.Header.Values("X-New-API-Settlement-Nonce")
-	if !present || len(requestValues) != 1 || len(nonceValues) != 1 || !settlementReadbackOpaqueValue(requestValues[0]) || !settlementReadbackOpaqueValue(nonceValues[0]) {
+	nonceValues := c.Request.Header.Values(common.SettlementReadbackNonceHeader)
+	if !present || len(requestValues) != 1 || len(nonceValues) != 1 {
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+	requestDigest, requestOK := model.SettlementReadbackOpaqueDigest(requestValues[0])
+	nonceDigest, nonceOK := model.SettlementReadbackOpaqueDigest(nonceValues[0])
+	if !requestOK || !nonceOK {
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
@@ -201,8 +205,8 @@ func GetSettlementReadback(c *gin.Context) {
 	log, pending, err := model.FindSettlementReadbackConsumeLog(
 		model.DB,
 		dispatchTokenID,
-		settlementReadbackValueDigest(requestValues[0]),
-		settlementReadbackValueDigest(nonceValues[0]),
+		requestDigest,
+		nonceDigest,
 	)
 	if err != nil {
 		switch {
@@ -225,19 +229,6 @@ func GetSettlementReadback(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": []settlementReadbackReceipt{receipt}})
-}
-
-func settlementReadbackOpaqueValue(value string) bool {
-	if len(value) != 43 {
-		return false
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(value)
-	return err == nil && len(decoded) == 32 && base64.RawURLEncoding.EncodeToString(decoded) == value
-}
-
-func settlementReadbackValueDigest(value string) string {
-	digest := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(digest[:])
 }
 
 func settlementReadbackNonnegativeInteger(raw string) (int64, bool) {

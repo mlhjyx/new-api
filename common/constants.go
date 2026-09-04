@@ -195,8 +195,11 @@ var GeminiSafetySetting string
 var CohereSafetySetting string
 
 const (
-	RequestIdKey         = "X-Oneapi-Request-Id"
-	UpstreamRequestIdKey = "X-Upstream-Request-Id"
+	RequestIdKey                      = "X-Oneapi-Request-Id"
+	UpstreamRequestIdKey              = "X-Upstream-Request-Id"
+	SettlementReadbackBindingIdKey    = "settlement_readback_binding_id"
+	SettlementReadbackRequestIdHeader = "X-New-API-Settlement-Request-Id"
+	SettlementReadbackNonceHeader     = "X-New-API-Settlement-Nonce"
 )
 
 const (

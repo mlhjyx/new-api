@@ -443,6 +443,9 @@ func TokenAuth() func(c *gin.Context) {
 		if err != nil {
 			return
 		}
+		if !enforceSettlementDispatchBinding(c) {
+			return
+		}
 		c.Next()
 	}
 }

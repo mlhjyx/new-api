@@ -143,6 +143,9 @@ type RelayInfo struct {
 	SubscriptionPlanTitle string
 	// RequestId is used for idempotent pre-consume/refund
 	RequestId string
+	// SettlementBindingId is fixed before request parsing and never rebuilt from
+	// upstream headers or mutable route configuration.
+	SettlementBindingId int
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.
 	SubscriptionAmountTotal               int64
 	SubscriptionAmountUsedAfterPreConsume int64
@@ -469,12 +472,13 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	info := &RelayInfo{
 		Request: request,
 
-		RequestId:  reqId,
-		UserId:     common.GetContextKeyInt(c, constant.ContextKeyUserId),
-		UsingGroup: common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
-		UserGroup:  common.GetContextKeyString(c, constant.ContextKeyUserGroup),
-		UserQuota:  common.GetContextKeyInt(c, constant.ContextKeyUserQuota),
-		UserEmail:  common.GetContextKeyString(c, constant.ContextKeyUserEmail),
+		RequestId:           reqId,
+		SettlementBindingId: common.GetContextKeyInt(c, common.SettlementReadbackBindingIdKey),
+		UserId:              common.GetContextKeyInt(c, constant.ContextKeyUserId),
+		UsingGroup:          common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+		UserGroup:           common.GetContextKeyString(c, constant.ContextKeyUserGroup),
+		UserQuota:           common.GetContextKeyInt(c, constant.ContextKeyUserQuota),
+		UserEmail:           common.GetContextKeyString(c, constant.ContextKeyUserEmail),
 
 		OriginModelName: common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
 

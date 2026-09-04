@@ -13,6 +13,7 @@ import (
 
 	common2 "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -506,6 +507,13 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
+	if bindingID := info.SettlementBindingId; bindingID > 0 {
+		if !model.BeginSettlementReadbackDispatch(model.DB, bindingID) {
+			return nil, errors.New("settlement physical dispatch denied")
+		}
+	}
+	req.Header.Del(common2.SettlementReadbackRequestIdHeader)
+	req.Header.Del(common2.SettlementReadbackNonceHeader)
 	resp, err := client.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())

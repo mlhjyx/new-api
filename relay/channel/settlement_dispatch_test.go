@@ -30,8 +30,12 @@ func TestBoundSettlementRequestCrossesPhysicalWireOnce(t *testing.T) {
 	service.InitHttpClient()
 
 	var calls atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+	var leaked atomic.Bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		calls.Add(1)
+		if request.Header.Get("X-New-API-Settlement-Request-Id") != "" || request.Header.Get("X-New-API-Settlement-Nonce") != "" {
+			leaked.Store(true)
+		}
 		response.WriteHeader(http.StatusOK)
 	}))
 	defer upstream.Close()
@@ -39,14 +43,16 @@ func TestBoundSettlementRequestCrossesPhysicalWireOnce(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
 	context.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(nil))
-	context.Set("settlement_readback_binding_id", binding.Id)
-	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	info := &relaycommon.RelayInfo{SettlementBindingId: binding.Id, ChannelMeta: &relaycommon.ChannelMeta{}}
 	request, err := http.NewRequest(http.MethodPost, upstream.URL, bytes.NewReader(nil))
 	require.NoError(t, err)
+	request.Header.Set("X-New-API-Settlement-Request-Id", "must-not-leak")
+	request.Header.Set("X-New-API-Settlement-Nonce", "must-not-leak")
 	response, err := DoRequest(context, request, info)
 	require.NoError(t, err)
 	require.NoError(t, response.Body.Close())
 	assert.EqualValues(t, 1, calls.Load())
+	assert.False(t, leaked.Load())
 
 	second, err := http.NewRequest(http.MethodPost, upstream.URL, bytes.NewReader(nil))
 	require.NoError(t, err)
