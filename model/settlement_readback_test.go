@@ -71,7 +71,7 @@ func TestSettlementReadbackCapabilityRequiresTransactionalRelationalLogTopology(
 }
 
 func TestSettlementReadbackBindingAllowsSameDigestForDifferentDispatchTokens(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:settlement-readback-composite?mode=memory&cache=shared&_foreign_keys=on"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-composite?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&SettlementReadbackBinding{}))
 	requestDigest := strings.Repeat("a", settlementReadbackDigestHexLength)
@@ -85,7 +85,7 @@ func TestSettlementReadbackBindingAllowsSameDigestForDifferentDispatchTokens(t *
 }
 
 func TestSettlementReadbackBindingCasAndExactLinkedLog(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:settlement-readback-link?mode=memory&cache=shared&_foreign_keys=on"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-link?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&SettlementReadbackBinding{}, &Log{}))
 	binding := &SettlementReadbackBinding{DispatchTokenId: 9, SettlementRequestIdSha256: strings.Repeat("d", settlementReadbackDigestHexLength), SettlementNonceSha256: strings.Repeat("e", settlementReadbackDigestHexLength), GatewayRequestId: "gateway", State: SettlementReadbackBindingBound, CreatedAt: 1}
@@ -131,7 +131,7 @@ func TestSettlementReadbackPepperKeyringIsVersionedAndClosed(t *testing.T) {
 }
 
 func TestSettlementReadbackCredentialLifecycleEnforcesRotationAndRevocation(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:settlement-readback-lifecycle?mode=memory&cache=shared&_foreign_keys=on"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-lifecycle?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&Token{}, &SettlementReadbackCredential{}, &SettlementReadbackBinding{}))
 	require.NoError(t, db.Create(&Token{Id: 42, UserId: 7, Key: "lifecycle-test-token", Status: common.TokenStatusEnabled}).Error)
@@ -192,4 +192,54 @@ func TestLoadSettlementReadbackPepperKeyringRequiresPrivateRegularFile(t *testin
 	require.NoError(t, os.Symlink(path, symlink))
 	_, err = LoadSettlementReadbackPepperKeyring(symlink)
 	assert.Error(t, err)
+}
+
+func TestSettlementReadbackCapabilityRequiresExactSharedSchema(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-schema?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	originalDB, originalLogDB := DB, LOG_DB
+	originalMainType, originalLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	originalConsume := common.LogConsumeEnabled
+	t.Cleanup(func() {
+		DB, LOG_DB = originalDB, originalLogDB
+		common.SetMainDatabaseType(originalMainType)
+		common.SetLogDatabaseType(originalLogType)
+		common.LogConsumeEnabled = originalConsume
+	})
+	DB, LOG_DB = db, db
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	common.SetLogDatabaseType(common.DatabaseTypeSQLite)
+	common.LogConsumeEnabled = true
+
+	require.NoError(t, db.AutoMigrate(&Token{}, &Log{}))
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady())
+	require.NoError(t, migrateSettlementReadbackSharedSchema(db))
+	var foreignKeys int
+	require.NoError(t, db.Raw("PRAGMA foreign_keys").Scan(&foreignKeys).Error)
+	assert.Equal(t, 1, foreignKeys)
+	assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+
+	require.NoError(t, db.Migrator().DropIndex(&Log{}, "idx_logs_settlement_binding_id"))
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady())
+}
+
+func TestSeparateRelationalLogMigrationDoesNotCreateSettlementRelation(t *testing.T) {
+	mainDB, err := gorm.Open(sqlite.Open("file:settlement-readback-main?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	logDB, err := gorm.Open(sqlite.Open("file:settlement-readback-log?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	originalDB, originalLogDB := DB, LOG_DB
+	originalMainType, originalLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	t.Cleanup(func() {
+		DB, LOG_DB = originalDB, originalLogDB
+		common.SetMainDatabaseType(originalMainType)
+		common.SetLogDatabaseType(originalLogType)
+	})
+	DB, LOG_DB = mainDB, logDB
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	common.SetLogDatabaseType(common.DatabaseTypeSQLite)
+	require.NoError(t, migrateLOGDB())
+	assert.True(t, logDB.Migrator().HasTable(&Log{}))
+	assert.False(t, logDB.Migrator().HasColumn(&Log{}, "SettlementBindingId"))
+	assert.False(t, logDB.Migrator().HasTable(&SettlementReadbackBinding{}))
 }

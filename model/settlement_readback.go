@@ -164,6 +164,50 @@ type SettlementReadbackBinding struct {
 	LogLinkedAt               int64  `json:"log_linked_at" gorm:"bigint;not null;default:0"`
 }
 
+// settlementReadbackLinkedLog is migrated only when the operational log and
+// main database are the same relational store. Keeping the association off the
+// generic Log model prevents a separate LOG_SQL_DSN from attempting a cross-DB
+// foreign key during its ordinary log migration.
+type settlementReadbackLinkedLog struct {
+	Id                  int                        `gorm:"column:id;primaryKey"`
+	SettlementBindingId *int                       `gorm:"column:settlement_binding_id;uniqueIndex:idx_logs_settlement_binding_id"`
+	SettlementBinding   *SettlementReadbackBinding `gorm:"foreignKey:SettlementBindingId;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
+}
+
+func (settlementReadbackLinkedLog) TableName() string { return "logs" }
+
+func migrateSettlementReadbackSharedSchema(db *gorm.DB) error {
+	if db == nil {
+		return errSettlementReadbackCredentialInvalid
+	}
+	if err := db.AutoMigrate(&SettlementReadbackCredential{}, &SettlementReadbackBinding{}, &Log{}); err != nil {
+		return err
+	}
+	if err := db.AutoMigrate(&settlementReadbackLinkedLog{}); err != nil {
+		return err
+	}
+	if !settlementReadbackSchemaReady(db) {
+		return errSettlementReadbackCredentialInvalid
+	}
+	return nil
+}
+
+func settlementReadbackSchemaReady(db *gorm.DB) bool {
+	if db == nil {
+		return false
+	}
+	migrator := db.Migrator()
+	return migrator.HasTable(&SettlementReadbackCredential{}) &&
+		migrator.HasTable(&SettlementReadbackBinding{}) &&
+		migrator.HasTable(&Log{}) &&
+		migrator.HasColumn(&Log{}, "SettlementBindingId") &&
+		migrator.HasIndex(&SettlementReadbackCredential{}, "idx_settlement_readback_credentials_lookup_prefix") &&
+		migrator.HasIndex(&SettlementReadbackBinding{}, "idx_settlement_request") &&
+		migrator.HasIndex(&SettlementReadbackBinding{}, "idx_settlement_nonce") &&
+		migrator.HasIndex(&Log{}, "idx_logs_settlement_binding_id") &&
+		migrator.HasConstraint(&settlementReadbackLinkedLog{}, "SettlementBinding")
+}
+
 func (binding *SettlementReadbackBinding) IsDispatchStarted() bool {
 	return binding != nil && (binding.State == SettlementReadbackBindingDispatchStarted || binding.State == SettlementReadbackBindingLogLinked)
 }
@@ -443,6 +487,9 @@ func SettlementReadbackRelationalLogTopologyReady() bool {
 		return false
 	}
 	if common.LogDatabaseType() != mainType {
+		return false
+	}
+	if !settlementReadbackSchemaReady(DB) {
 		return false
 	}
 	if mainType == common.DatabaseTypeSQLite {

@@ -2,13 +2,12 @@ package controller
 
 import (
 	"io"
-	"math"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
@@ -17,6 +16,11 @@ import (
 const settlementReadbackContract = "new-api-settlement-readback/v1"
 const settlementReadbackPepperKeyringFileEnv = "SETTLEMENT_READBACK_CREDENTIAL_PEPPER_KEYRING_FILE"
 const settlementReadbackAdminBodyMaxBytes = 1024
+
+var settlementReadbackAdminIntegerBodies = map[string]*regexp.Regexp{
+	"dispatch_token_id": regexp.MustCompile(`^\{[ \t\r\n]*"dispatch_token_id"[ \t\r\n]*:[ \t\r\n]*([1-9][0-9]{0,9})[ \t\r\n]*\}$`),
+	"overlap_seconds":   regexp.MustCompile(`^\{[ \t\r\n]*"overlap_seconds"[ \t\r\n]*:[ \t\r\n]*([1-9][0-9]{0,9})[ \t\r\n]*\}$`),
+}
 
 type settlementReadbackCapabilityResponse struct {
 	SchemaVersion string `json:"schema_version"`
@@ -38,15 +42,16 @@ func settlementReadbackAdminInteger(c *gin.Context, key string) (int64, bool) {
 	if err != nil || len(raw) == 0 || len(raw) > settlementReadbackAdminBodyMaxBytes {
 		return 0, false
 	}
-	var body map[string]interface{}
-	if err := common.Unmarshal(raw, &body); err != nil || len(body) != 1 {
+	pattern := settlementReadbackAdminIntegerBodies[key]
+	if pattern == nil {
 		return 0, false
 	}
-	value, ok := body[key].(float64)
-	if !ok || value < 1 || value > math.MaxInt32 || value != math.Trunc(value) {
+	matched := pattern.FindSubmatch(raw)
+	if len(matched) != 2 {
 		return 0, false
 	}
-	return int64(value), true
+	value, err := strconv.ParseInt(string(matched[1]), 10, 32)
+	return value, err == nil && value > 0
 }
 
 func settlementReadbackAdminKeyring() (*model.SettlementReadbackPepperKeyring, error) {
@@ -120,6 +125,10 @@ func RotateSettlementReadbackCredential(c *gin.Context) {
 func RevokeSettlementReadbackCredential(c *gin.Context) {
 	credentialID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || credentialID < 1 || strconv.Itoa(credentialID) != c.Param("id") {
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+	if raw, readError := io.ReadAll(io.LimitReader(c.Request.Body, 1)); readError != nil || len(raw) != 0 {
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}

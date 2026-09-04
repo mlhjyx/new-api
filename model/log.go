@@ -81,9 +81,38 @@ type Log struct {
 	// SettlementBindingId is used only by the exact settlement-readback path.
 	// It must never be populated from request text, Content, Other, or a
 	// gateway request id.
-	SettlementBindingId *int                       `json:"-" gorm:"uniqueIndex"`
-	SettlementBinding   *SettlementReadbackBinding `json:"-" gorm:"foreignKey:SettlementBindingId;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
+	SettlementBindingId *int `json:"-" gorm:"uniqueIndex:idx_logs_settlement_binding_id"`
 }
+
+// logWithoutSettlementReadback is used only for a separately configured
+// relational LOG_DB. That topology cannot enforce a cross-database settlement
+// binding, so its migration must retain the legacy Log shape and omit both the
+// settlement column and relationship.
+type logWithoutSettlementReadback struct {
+	Id                int   `gorm:"index:idx_created_at_id,priority:2;index:idx_user_id_id,priority:2"`
+	UserId            int   `gorm:"index;index:idx_user_id_id,priority:1"`
+	CreatedAt         int64 `gorm:"bigint;index:idx_created_at_id,priority:1;index:idx_created_at_type"`
+	Type              int   `gorm:"index:idx_created_at_type"`
+	Content           string
+	Username          string `gorm:"index;index:index_username_model_name,priority:2;default:''"`
+	TokenName         string `gorm:"index;default:''"`
+	ModelName         string `gorm:"index;index:index_username_model_name,priority:1;default:''"`
+	Quota             int    `gorm:"default:0"`
+	PromptTokens      int    `gorm:"default:0"`
+	CompletionTokens  int    `gorm:"default:0"`
+	UseTime           int    `gorm:"default:0"`
+	IsStream          bool
+	ChannelId         int    `gorm:"index"`
+	ChannelName       string `gorm:"->"`
+	TokenId           int    `gorm:"default:0;index"`
+	Group             string `gorm:"index"`
+	Ip                string `gorm:"index;default:''"`
+	RequestId         string `gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
+	UpstreamRequestId string `gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
+	Other             string
+}
+
+func (logWithoutSettlementReadback) TableName() string { return "logs" }
 
 // don't use iota, avoid change log type value
 const (

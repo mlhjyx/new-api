@@ -41,7 +41,7 @@ func TestSettlementReadbackCannotFallbackToBroadLogsBeforeBindingContract(t *tes
 
 func TestSettlementReadbackRootCredentialLifecycleReturnsSecretOnce(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open("file:settlement-readback-controller?mode=memory&cache=shared&_foreign_keys=on"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-controller?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.Token{}, &model.SettlementReadbackCredential{}))
 	require.NoError(t, db.Create(&model.Token{Id: 42, UserId: 7, Key: "controller-reader-token", Status: common.TokenStatusEnabled}).Error)
@@ -83,4 +83,41 @@ func TestSettlementReadbackRootCredentialLifecycleReturnsSecretOnce(t *testing.T
 	revokeContext.Request = httptest.NewRequest(http.MethodPost, "/revoke", nil)
 	RevokeSettlementReadbackCredential(revokeContext)
 	require.Equal(t, http.StatusOK, revokeRecorder.Code)
+}
+
+func TestSettlementReadbackAdminBodiesAreClosedBeforeCredentialWork(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	invalidBodies := []string{
+		``,
+		`null`,
+		`[]`,
+		`{"dispatch_token_id":1,"dispatch_token_id":2}`,
+		`{"dispatch_token_id":1,"extra":2}`,
+		`{"dispatch_token_id":"1"}`,
+		`{"dispatch_token_id":1.0}`,
+		`{"dispatch_token_id":1e0}`,
+		`{"dispatch_token_id":0}`,
+		`{"dispatch_token_id":1} trailing`,
+	}
+	for _, body := range invalidBodies {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest(http.MethodPost, "/credentials", bytes.NewBufferString(body))
+		CreateSettlementReadbackCredential(context)
+		assert.Equal(t, http.StatusBadRequest, recorder.Code, body)
+	}
+
+	rotateRecorder := httptest.NewRecorder()
+	rotateContext, _ := gin.CreateTestContext(rotateRecorder)
+	rotateContext.Params = gin.Params{{Key: "id", Value: "1"}}
+	rotateContext.Request = httptest.NewRequest(http.MethodPost, "/rotate", bytes.NewBufferString(`{"overlap_seconds":1,"overlap_seconds":2}`))
+	RotateSettlementReadbackCredential(rotateContext)
+	assert.Equal(t, http.StatusBadRequest, rotateRecorder.Code)
+
+	revokeRecorder := httptest.NewRecorder()
+	revokeContext, _ := gin.CreateTestContext(revokeRecorder)
+	revokeContext.Params = gin.Params{{Key: "id", Value: "1"}}
+	revokeContext.Request = httptest.NewRequest(http.MethodPost, "/revoke", bytes.NewBufferString(`{}`))
+	RevokeSettlementReadbackCredential(revokeContext)
+	assert.Equal(t, http.StatusBadRequest, revokeRecorder.Code)
 }

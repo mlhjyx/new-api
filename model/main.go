@@ -305,6 +305,11 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if os.Getenv("LOG_SQL_DSN") == "" {
+		if err := migrateSettlementReadbackSharedSchema(DB); err != nil {
+			return fmt.Errorf("failed to migrate settlement readback schema: %v", err)
+		}
+	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
 			return err
@@ -388,6 +393,11 @@ func migrateDBFast() error {
 	if err := DB.AutoMigrate(&Log{}); err != nil {
 		return fmt.Errorf("failed to migrate Log: %v", err)
 	}
+	if os.Getenv("LOG_SQL_DSN") == "" {
+		if err := migrateSettlementReadbackSharedSchema(DB); err != nil {
+			return fmt.Errorf("failed to migrate settlement readback schema: %v", err)
+		}
+	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
 			return err
@@ -405,7 +415,7 @@ func migrateLOGDB() error {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return migrateClickHouseLogDB()
 	}
-	return LOG_DB.AutoMigrate(&Log{})
+	return LOG_DB.AutoMigrate(&logWithoutSettlementReadback{})
 }
 
 func migrateClickHouseLogDB() error {
