@@ -276,6 +276,8 @@ func migrateDB() error {
 		&Option{},
 		&Redemption{},
 		&Ability{},
+		&SettlementReadbackCredential{},
+		&SettlementReadbackBinding{},
 		&Log{},
 		&Midjourney{},
 		&TopUp{},
@@ -330,7 +332,6 @@ func migrateDBFast() error {
 		{&Option{}, "Option"},
 		{&Redemption{}, "Redemption"},
 		{&Ability{}, "Ability"},
-		{&Log{}, "Log"},
 		{&Midjourney{}, "Midjourney"},
 		{&TopUp{}, "TopUp"},
 		{&QuotaData{}, "QuotaData"},
@@ -374,6 +375,18 @@ func migrateDBFast() error {
 		if err != nil {
 			return err
 		}
+	}
+	// These migrations are ordered because Log has a foreign-key relationship to
+	// SettlementReadbackBinding. Running them in the concurrent fast path would
+	// make the schema race non-deterministically across supported databases.
+	if err := DB.AutoMigrate(&SettlementReadbackCredential{}); err != nil {
+		return fmt.Errorf("failed to migrate SettlementReadbackCredential: %v", err)
+	}
+	if err := DB.AutoMigrate(&SettlementReadbackBinding{}); err != nil {
+		return fmt.Errorf("failed to migrate SettlementReadbackBinding: %v", err)
+	}
+	if err := DB.AutoMigrate(&Log{}); err != nil {
+		return fmt.Errorf("failed to migrate Log: %v", err)
 	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {

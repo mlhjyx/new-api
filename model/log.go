@@ -78,6 +78,11 @@ type Log struct {
 	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
 	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
 	Other             string `json:"other"`
+	// SettlementBindingId is used only by the exact settlement-readback path.
+	// It must never be populated from request text, Content, Other, or a
+	// gateway request id.
+	SettlementBindingId *int                       `json:"-" gorm:"uniqueIndex"`
+	SettlementBinding   *SettlementReadbackBinding `json:"-" gorm:"foreignKey:SettlementBindingId;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 }
 
 // don't use iota, avoid change log type value
