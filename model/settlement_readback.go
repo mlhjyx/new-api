@@ -239,7 +239,7 @@ func settlementReadbackSchemaReady(db *gorm.DB) bool {
 		settlementReadbackHasExactUniqueIndex(db, &SettlementReadbackBinding{}, "idx_settlement_request", []string{"dispatch_token_id", "settlement_request_id_sha256"}) &&
 		settlementReadbackHasExactUniqueIndex(db, &SettlementReadbackBinding{}, "idx_settlement_nonce", []string{"dispatch_token_id", "settlement_nonce_sha256"}) &&
 		settlementReadbackHasExactUniqueIndex(db, &Log{}, "idx_logs_settlement_binding_id", []string{"settlement_binding_id"}) &&
-		migrator.HasConstraint(&settlementReadbackLinkedLog{}, "SettlementBinding")
+		settlementReadbackHasExactForeignKey(db)
 }
 
 type settlementReadbackColumnContract struct {
@@ -323,6 +323,73 @@ func settlementReadbackColumnNullable(db *gorm.DB, table any, columnType gorm.Co
 		return false, false
 	}
 	return rows[0].NotNull == 0, true
+}
+
+type settlementReadbackForeignKeyContract struct {
+	ReferencedTable  string `gorm:"column:referenced_table"`
+	SourceColumn     string `gorm:"column:source_column"`
+	ReferencedColumn string `gorm:"column:referenced_column"`
+	UpdateRule       string `gorm:"column:update_rule"`
+	DeleteRule       string `gorm:"column:delete_rule"`
+}
+
+func settlementReadbackHasExactForeignKey(db *gorm.DB) bool {
+	if db == nil || !db.Migrator().HasConstraint(&settlementReadbackLinkedLog{}, "SettlementBinding") {
+		return false
+	}
+	var rows []settlementReadbackForeignKeyContract
+	var err error
+	switch db.Dialector.Name() {
+	case "sqlite":
+		err = db.Raw(`SELECT "table" AS referenced_table, "from" AS source_column,
+			"to" AS referenced_column, UPPER(on_update) AS update_rule,
+			UPPER(on_delete) AS delete_rule
+			FROM pragma_foreign_key_list(?) WHERE "from" = ?`,
+			"logs", "settlement_binding_id").Scan(&rows).Error
+	case "mysql":
+		err = db.Raw(`SELECT k.REFERENCED_TABLE_NAME AS referenced_table,
+			k.COLUMN_NAME AS source_column,
+			k.REFERENCED_COLUMN_NAME AS referenced_column,
+			UPPER(r.UPDATE_RULE) AS update_rule,
+			UPPER(r.DELETE_RULE) AS delete_rule
+			FROM information_schema.KEY_COLUMN_USAGE k
+			JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+			  ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
+			 AND r.TABLE_NAME = k.TABLE_NAME
+			 AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+			WHERE k.CONSTRAINT_SCHEMA = DATABASE()
+			  AND k.TABLE_NAME = ? AND k.CONSTRAINT_NAME = ?`,
+			"logs", "fk_logs_settlement_binding").Scan(&rows).Error
+	case "postgres":
+		err = db.Raw(`SELECT ccu.table_name AS referenced_table,
+			kcu.column_name AS source_column,
+			ccu.column_name AS referenced_column,
+			UPPER(rc.update_rule) AS update_rule,
+			UPPER(rc.delete_rule) AS delete_rule
+			FROM information_schema.referential_constraints rc
+			JOIN information_schema.key_column_usage kcu
+			  ON kcu.constraint_catalog = rc.constraint_catalog
+			 AND kcu.constraint_schema = rc.constraint_schema
+			 AND kcu.constraint_name = rc.constraint_name
+			JOIN information_schema.constraint_column_usage ccu
+			  ON ccu.constraint_catalog = rc.unique_constraint_catalog
+			 AND ccu.constraint_schema = rc.unique_constraint_schema
+			 AND ccu.constraint_name = rc.unique_constraint_name
+			WHERE kcu.table_schema = current_schema()
+			  AND kcu.table_name = ? AND kcu.constraint_name = ?`,
+			"logs", "fk_logs_settlement_binding").Scan(&rows).Error
+	default:
+		return false
+	}
+	if err != nil || len(rows) != 1 {
+		return false
+	}
+	contract := rows[0]
+	return contract.ReferencedTable == "settlement_readback_bindings" &&
+		contract.SourceColumn == "settlement_binding_id" &&
+		contract.ReferencedColumn == "id" &&
+		contract.UpdateRule == "RESTRICT" &&
+		contract.DeleteRule == "RESTRICT"
 }
 
 func settlementReadbackHasExactUniqueIndex(db *gorm.DB, table any, indexName string, expectedColumns []string) bool {
