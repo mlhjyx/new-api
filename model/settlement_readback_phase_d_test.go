@@ -44,6 +44,66 @@ func TestSettlementReadbackPhaseDPostgreSQL(t *testing.T) {
 	runSettlementReadbackExternalPhaseDContract(t, db, common.DatabaseTypePostgreSQL)
 }
 
+func TestSettlementReadbackReadinessRejectsMySQLForeignKeyActionDrift(t *testing.T) {
+	dsn := os.Getenv("TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("UNPROVEN: set TEST_MYSQL_DSN to run the MySQL foreign-key drift gate")
+	}
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	runSettlementReadbackExternalForeignKeyDrift(t, db, common.DatabaseTypeMySQL)
+}
+
+func TestSettlementReadbackReadinessRejectsPostgreSQLForeignKeyActionDrift(t *testing.T) {
+	dsn := os.Getenv("TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("UNPROVEN: set TEST_POSTGRES_DSN to run the PostgreSQL foreign-key drift gate")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	runSettlementReadbackExternalForeignKeyDrift(t, db, common.DatabaseTypePostgreSQL)
+}
+
+func runSettlementReadbackExternalForeignKeyDrift(t *testing.T, db *gorm.DB, databaseType common.DatabaseType) {
+	t.Helper()
+	for _, table := range []string{"logs", "settlement_readback_bindings", "settlement_readback_credentials"} {
+		if db.Migrator().HasTable(table) {
+			t.Fatalf("refusing foreign-key drift test against non-empty %s database: table %s already exists", databaseType, table)
+		}
+	}
+	t.Cleanup(func() {
+		for _, table := range []string{"logs", "settlement_readback_bindings", "settlement_readback_credentials"} {
+			if db.Migrator().HasTable(table) {
+				require.NoError(t, db.Migrator().DropTable(table))
+			}
+		}
+		sqlDB, err := db.DB()
+		if err == nil {
+			require.NoError(t, sqlDB.Close())
+		}
+	})
+
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	restoreSettlementReadbackTestTopology(t, db, databaseType)
+	assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+
+	switch databaseType {
+	case common.DatabaseTypeMySQL:
+		require.NoError(t, db.Exec("ALTER TABLE logs DROP FOREIGN KEY fk_logs_settlement_binding").Error)
+		require.NoError(t, db.Exec(`ALTER TABLE logs ADD CONSTRAINT fk_logs_settlement_binding
+			FOREIGN KEY (settlement_binding_id) REFERENCES settlement_readback_bindings(id)
+			ON UPDATE CASCADE ON DELETE CASCADE`).Error)
+	case common.DatabaseTypePostgreSQL:
+		require.NoError(t, db.Exec("ALTER TABLE logs DROP CONSTRAINT fk_logs_settlement_binding").Error)
+		require.NoError(t, db.Exec(`ALTER TABLE logs ADD CONSTRAINT fk_logs_settlement_binding
+			FOREIGN KEY (settlement_binding_id) REFERENCES settlement_readback_bindings(id)
+			ON UPDATE CASCADE ON DELETE CASCADE`).Error)
+	default:
+		t.Fatalf("unsupported database type %q", databaseType)
+	}
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "cascade actions must not satisfy the retention contract")
+}
+
 func runSettlementReadbackExternalPhaseDContract(t *testing.T, db *gorm.DB, databaseType common.DatabaseType) {
 	t.Helper()
 	for _, table := range []string{"logs", "settlement_readback_bindings", "settlement_readback_credentials"} {

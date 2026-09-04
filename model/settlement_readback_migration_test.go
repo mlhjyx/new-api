@@ -195,6 +195,27 @@ func TestSettlementReadbackReadinessRejectsCredentialColumnDrift(t *testing.T) {
 	}
 }
 
+func TestSettlementReadbackReadinessRejectsWrongForeignKeyActions(t *testing.T) {
+	db, err := openSettlementReadbackSQLite("foreign-key-action-drift")
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	restoreSettlementReadbackTestTopology(t, db, common.DatabaseTypeSQLite)
+	assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+
+	require.NoError(t, db.Exec("ALTER TABLE logs RENAME TO logs_old").Error)
+	require.NoError(t, db.Exec(`CREATE TABLE logs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		settlement_binding_id INTEGER,
+		CONSTRAINT fk_logs_settlement_binding
+			FOREIGN KEY (settlement_binding_id) REFERENCES settlement_readback_bindings(id)
+			ON UPDATE CASCADE ON DELETE CASCADE
+	)`).Error)
+	require.NoError(t, db.Exec("DROP TABLE logs_old").Error)
+	require.NoError(t, db.Exec("CREATE UNIQUE INDEX idx_logs_settlement_binding_id ON logs(settlement_binding_id)").Error)
+
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "cascade actions must not satisfy the retention contract")
+}
+
 func restoreSettlementReadbackTestTopology(t *testing.T, db *gorm.DB, databaseType common.DatabaseType) {
 	t.Helper()
 	originalDB, originalLogDB := DB, LOG_DB
