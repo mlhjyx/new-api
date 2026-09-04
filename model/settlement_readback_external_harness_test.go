@@ -111,6 +111,9 @@ func settlementReadbackExternalUserObjectInventory(db *gorm.DB, databaseType com
 			UNION ALL
 			SELECT CONCAT('event:', EVENT_NAME) AS object_name
 			  FROM information_schema.EVENTS WHERE EVENT_SCHEMA = DATABASE()
+			UNION ALL
+			SELECT CONCAT('constraint:', TABLE_NAME, ':', CONSTRAINT_NAME, ':', CONSTRAINT_TYPE) AS object_name
+			  FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE()
 		) owned_objects ORDER BY object_name`
 	case common.DatabaseTypePostgreSQL:
 		query = `SELECT object_name FROM (
@@ -146,6 +149,12 @@ func settlementReadbackExternalUserObjectInventory(db *gorm.DB, databaseType com
 			  JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
 			 WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
 			   AND t.typtype IN ('d','e','r','m')
+			UNION ALL
+			SELECT 'constraint:' || n.nspname || ':' || COALESCE(c.relname, '') || ':' || con.conname
+			  FROM pg_catalog.pg_constraint con
+			  JOIN pg_catalog.pg_namespace n ON n.oid = con.connamespace
+			  LEFT JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
+			 WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
 			UNION ALL
 			SELECT 'schema:' || n.nspname
 			  FROM pg_catalog.pg_namespace n
