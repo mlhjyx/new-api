@@ -2,14 +2,18 @@ package controller
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -120,4 +124,79 @@ func TestSettlementReadbackAdminBodiesAreClosedBeforeCredentialWork(t *testing.T
 	revokeContext.Request = httptest.NewRequest(http.MethodPost, "/revoke", bytes.NewBufferString(`{}`))
 	RevokeSettlementReadbackCredential(revokeContext)
 	assert.Equal(t, http.StatusBadRequest, revokeRecorder.Code)
+}
+
+func TestSettlementReadbackReturnsOnlyExactLinkedReceiptOrPending(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-receipt?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, model.EnsureSettlementReadbackSharedSchema(db))
+	originalDB, originalLogDB := model.DB, model.LOG_DB
+	originalMainType, originalLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	originalConsume := common.LogConsumeEnabled
+	model.DB, model.LOG_DB = db, db
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	common.SetLogDatabaseType(common.DatabaseTypeSQLite)
+	common.LogConsumeEnabled = true
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = originalDB, originalLogDB
+		common.SetMainDatabaseType(originalMainType)
+		common.SetLogDatabaseType(originalLogType)
+		common.LogConsumeEnabled = originalConsume
+	})
+
+	requestID := strings.Repeat("A", 43)
+	nonce := strings.Repeat("B", 43)
+	digest := func(value string) string {
+		sum := sha256.Sum256([]byte(value))
+		return hex.EncodeToString(sum[:])
+	}
+	binding := &model.SettlementReadbackBinding{
+		DispatchTokenId:           42,
+		SettlementRequestIdSha256: digest(requestID),
+		SettlementNonceSha256:     digest(nonce),
+		GatewayRequestId:          "gateway-internal",
+		State:                     model.SettlementReadbackBindingBound,
+		CreatedAt:                 1,
+	}
+	require.NoError(t, db.Create(binding).Error)
+	require.True(t, model.BeginSettlementReadbackDispatch(db, binding.Id))
+	log := &model.Log{
+		Type:                model.LogTypeConsume,
+		TokenId:             42,
+		SettlementBindingId: &binding.Id,
+		CreatedAt:           2,
+		ModelName:           "claude-sonnet",
+		ChannelId:           7,
+		Quota:               1250,
+		PromptTokens:        10,
+		CompletionTokens:    20,
+		UpstreamRequestId:   "internal-upstream-id",
+		Other:               `{"usage_semantic":"anthropic","cache_creation_tokens":3,"cache_tokens":4}`,
+	}
+	require.NoError(t, model.LinkSettlementReadbackConsumeLog(db, binding.Id, log))
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Set(middleware.SettlementReadbackDispatchTokenContextKey, 42)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/settlement-readback/v1?request_id="+requestID, nil)
+	context.Request.Header.Set("X-New-API-Settlement-Nonce", nonce)
+	GetSettlementReadback(context)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.JSONEq(t, `{"data":[{"request_id":"`+requestID+`","type":"consume","model_name":"claude-sonnet","channel_id":7,"quota":"1250","prompt_tokens":10,"completion_tokens":20,"usage_semantic":"anthropic","cache_creation_tokens":3,"cache_read_tokens":4,"upstream_id_state":"observed"}]}`, recorder.Body.String())
+	assert.NotContains(t, recorder.Body.String(), "internal-upstream-id")
+	assert.NotContains(t, recorder.Body.String(), "gateway-internal")
+
+	pendingID := strings.Repeat("C", 43)
+	pendingNonce := strings.Repeat("D", 43)
+	pending := &model.SettlementReadbackBinding{DispatchTokenId: 42, SettlementRequestIdSha256: digest(pendingID), SettlementNonceSha256: digest(pendingNonce), GatewayRequestId: "pending-internal", State: model.SettlementReadbackBindingDispatchStarted, CreatedAt: 3}
+	require.NoError(t, db.Create(pending).Error)
+	pendingRecorder := httptest.NewRecorder()
+	pendingContext, _ := gin.CreateTestContext(pendingRecorder)
+	pendingContext.Set(middleware.SettlementReadbackDispatchTokenContextKey, 42)
+	pendingContext.Request = httptest.NewRequest(http.MethodGet, "/api/settlement-readback/v1?request_id="+pendingID, nil)
+	pendingContext.Request.Header.Set("X-New-API-Settlement-Nonce", pendingNonce)
+	GetSettlementReadback(pendingContext)
+	require.Equal(t, http.StatusOK, pendingRecorder.Code)
+	assert.JSONEq(t, `{"data":[]}`, pendingRecorder.Body.String())
 }
