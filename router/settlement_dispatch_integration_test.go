@@ -555,6 +555,45 @@ func TestSettlementDispatchDoesNotFollowUpstreamRedirectAfterOneCAS(t *testing.T
 	assert.Equal(t, model.SettlementReadbackBindingDispatchStarted, binding.State)
 }
 
+func TestSettlementPreflightDoesNotReplaceSuffixSelectedChannel(t *testing.T) {
+	var selectedWires atomic.Int32
+	selected := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		selectedWires.Add(1)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"chatcmpl-selected","object":"chat.completion","created":1710000000,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"selected"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer selected.Close()
+	var randomWires atomic.Int32
+	random := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		randomWires.Add(1)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"chatcmpl-random","object":"chat.completion","created":1710000000,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"wrong"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer random.Close()
+
+	db, engine := newSettlementDispatchIntegrationHarness(t, "suffix-selected-channel", selected.URL, constant.ChannelTypeOpenAI, "")
+	randomPriority := int64(20)
+	randomURL := random.URL
+	require.NoError(t, db.Create(&model.Channel{Id: 8, Type: constant.ChannelTypeOpenAI, Key: "random-channel-key", Status: common.ChannelStatusEnabled, Name: "must-not-select", BaseURL: &randomURL, Models: "gpt-4o-mini", Group: "default", Priority: &randomPriority}).Error)
+	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "gpt-4o-mini", ChannelId: 8, Enabled: true, Priority: &randomPriority}).Error)
+
+	response := performSettlementDispatchRequestWithAuthorization(
+		engine,
+		http.MethodPost,
+		"/v1/chat/completions",
+		`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`,
+		"Bearer sk-settlementdispatch-7",
+		settlementDispatchOpaque(224),
+		settlementDispatchOpaque(225),
+	)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	assert.EqualValues(t, 1, selectedWires.Load())
+	assert.Zero(t, randomWires.Load())
+	var linked model.Log
+	require.NoError(t, db.Where("settlement_binding_id IS NOT NULL").First(&linked).Error)
+	assert.Equal(t, 7, linked.ChannelId)
+}
+
 func addSettlementFallbackChannel(t *testing.T, db *gorm.DB, fallbackURL string) {
 	t.Helper()
 	priority := int64(0)
