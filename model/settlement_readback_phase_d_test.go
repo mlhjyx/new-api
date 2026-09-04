@@ -16,10 +16,15 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
+func settlementReadbackPhaseDGormConfig() *gorm.Config {
+	return &gorm.Config{Logger: gormlogger.Default.LogMode(gormlogger.Silent)}
+}
+
 func TestSettlementReadbackPhaseDSQLite(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:settlement-phase-d?mode=memory&cache=shared&_pragma=foreign_keys(1)&_pragma=busy_timeout(30000)"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:settlement-phase-d?mode=memory&cache=shared&_pragma=foreign_keys(1)&_pragma=busy_timeout(30000)"), settlementReadbackPhaseDGormConfig())
 	require.NoError(t, err)
 	runSettlementReadbackPhaseDContract(t, db, common.DatabaseTypeSQLite)
 }
@@ -29,7 +34,7 @@ func TestSettlementReadbackPhaseDMySQL(t *testing.T) {
 	if dsn == "" {
 		t.Skip("UNPROVEN: set TEST_MYSQL_DSN to run the MySQL settlement readback Phase D contract")
 	}
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(mysql.Open(dsn), settlementReadbackPhaseDGormConfig())
 	require.NoError(t, err)
 	runSettlementReadbackExternalPhaseDContract(t, db, common.DatabaseTypeMySQL)
 }
@@ -39,7 +44,7 @@ func TestSettlementReadbackPhaseDPostgreSQL(t *testing.T) {
 	if dsn == "" {
 		t.Skip("UNPROVEN: set TEST_POSTGRES_DSN to run the PostgreSQL settlement readback Phase D contract")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), settlementReadbackPhaseDGormConfig())
 	require.NoError(t, err)
 	runSettlementReadbackExternalPhaseDContract(t, db, common.DatabaseTypePostgreSQL)
 }
@@ -49,7 +54,7 @@ func TestSettlementReadbackReadinessRejectsMySQLForeignKeyActionDrift(t *testing
 	if dsn == "" {
 		t.Skip("UNPROVEN: set TEST_MYSQL_DSN to run the MySQL foreign-key drift gate")
 	}
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(mysql.Open(dsn), settlementReadbackPhaseDGormConfig())
 	require.NoError(t, err)
 	runSettlementReadbackExternalForeignKeyDrift(t, db, common.DatabaseTypeMySQL)
 }
@@ -59,7 +64,7 @@ func TestSettlementReadbackReadinessRejectsPostgreSQLForeignKeyActionDrift(t *te
 	if dsn == "" {
 		t.Skip("UNPROVEN: set TEST_POSTGRES_DSN to run the PostgreSQL foreign-key drift gate")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), settlementReadbackPhaseDGormConfig())
 	require.NoError(t, err)
 	runSettlementReadbackExternalForeignKeyDrift(t, db, common.DatabaseTypePostgreSQL)
 }
