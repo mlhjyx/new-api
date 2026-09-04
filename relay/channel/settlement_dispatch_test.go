@@ -43,7 +43,11 @@ func TestBoundSettlementRequestCrossesPhysicalWireOnce(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
 	context.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(nil))
-	info := &relaycommon.RelayInfo{SettlementBindingId: binding.Id, ChannelMeta: &relaycommon.ChannelMeta{}}
+	info := &relaycommon.RelayInfo{
+		SettlementBindingId:     binding.Id,
+		SettlementDispatchFence: string(SettlementDispatchFenceOpenAIChat),
+		ChannelMeta:             &relaycommon.ChannelMeta{},
+	}
 	request, err := http.NewRequest(http.MethodPost, upstream.URL, bytes.NewReader(nil))
 	require.NoError(t, err)
 	request.Header.Set("X-New-API-Settlement-Request-Id", "must-not-leak")
