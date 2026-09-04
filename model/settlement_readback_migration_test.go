@@ -110,6 +110,63 @@ func TestSettlementReadbackMigrationPreservesPopulatedLegacyLogs(t *testing.T) {
 	}
 }
 
+func TestSettlementReadbackReadinessRejectsNonUniqueContractIndexes(t *testing.T) {
+	tests := []struct {
+		name        string
+		dropModel   any
+		indexName   string
+		replacement string
+	}{
+		{
+			name:        "token request digest",
+			dropModel:   &SettlementReadbackBinding{},
+			indexName:   "idx_settlement_request",
+			replacement: "CREATE INDEX idx_settlement_request ON settlement_readback_bindings(dispatch_token_id, settlement_request_id_sha256)",
+		},
+		{
+			name:        "token nonce digest",
+			dropModel:   &SettlementReadbackBinding{},
+			indexName:   "idx_settlement_nonce",
+			replacement: "CREATE INDEX idx_settlement_nonce ON settlement_readback_bindings(dispatch_token_id, settlement_nonce_sha256)",
+		},
+		{
+			name:        "linked log",
+			dropModel:   &Log{},
+			indexName:   "idx_logs_settlement_binding_id",
+			replacement: "CREATE INDEX idx_logs_settlement_binding_id ON logs(settlement_binding_id)",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, err := openSettlementReadbackSQLite("nonunique-" + testCase.indexName)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+			restoreSettlementReadbackTestTopology(t, db, common.DatabaseTypeSQLite)
+			assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+
+			require.NoError(t, db.Migrator().DropIndex(testCase.dropModel, testCase.indexName))
+			require.NoError(t, db.Exec(testCase.replacement).Error)
+			assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "a same-name non-unique index must not satisfy the contract")
+		})
+	}
+}
+
+func restoreSettlementReadbackTestTopology(t *testing.T, db *gorm.DB, databaseType common.DatabaseType) {
+	t.Helper()
+	originalDB, originalLogDB := DB, LOG_DB
+	originalMainType, originalLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	DB, LOG_DB = db, db
+	common.SetDatabaseTypes(databaseType, databaseType)
+	common.LogConsumeEnabled = true
+	t.Cleanup(func() {
+		DB, LOG_DB = originalDB, originalLogDB
+		common.SetDatabaseTypes(originalMainType, originalLogType)
+		common.LogConsumeEnabled = originalLogConsumeEnabled
+	})
+}
+
 func openSettlementReadbackSQLite(name string) (*gorm.DB, error) {
 	path := fmt.Sprintf("file:%s?mode=memory&cache=shared&_pragma=foreign_keys(1)", name)
 	return gorm.Open(sqlite.Open(path), &gorm.Config{})
