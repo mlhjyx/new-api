@@ -12,6 +12,7 @@ import (
 )
 
 func SetApiRouter(router *gin.Engine) {
+	router.GET("/api/corresponding-source/v1", controller.GetCorrespondingSource)
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"))
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
