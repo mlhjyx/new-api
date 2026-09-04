@@ -44,9 +44,9 @@ func validateSettlementReadbackExternalOwnership(db *gorm.DB, databaseType commo
 		return fmt.Errorf("settlement readback external database identity is invalid")
 	}
 	inventory, err := settlementReadbackExternalUserObjectInventory(db, databaseType)
-	expectedInventory := []string{"relation:" + settlementReadbackOwnershipTable}
+	expectedInventory := []string{"relation:base_table:" + settlementReadbackOwnershipTable}
 	if databaseType == common.DatabaseTypePostgreSQL {
-		expectedInventory = []string{"relation:public:" + settlementReadbackOwnershipTable, "schema:public"}
+		expectedInventory = []string{"relation:r:public:" + settlementReadbackOwnershipTable, "schema:public"}
 	}
 	if err != nil || !settlementReadbackInventoryEqual(inventory, expectedInventory) {
 		return fmt.Errorf("settlement readback external database inventory is not exclusively owned")
@@ -97,7 +97,7 @@ func settlementReadbackExternalUserObjectInventory(db *gorm.DB, databaseType com
 	switch databaseType {
 	case common.DatabaseTypeMySQL:
 		query = `SELECT object_name FROM (
-			SELECT CONCAT('relation:', TABLE_NAME) AS object_name
+			SELECT CONCAT('relation:', LOWER(REPLACE(TABLE_TYPE, ' ', '_')), ':', TABLE_NAME) AS object_name
 			  FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()
 			UNION ALL
 			SELECT CONCAT('index:', TABLE_NAME, ':', INDEX_NAME) AS object_name
@@ -120,7 +120,7 @@ func settlementReadbackExternalUserObjectInventory(db *gorm.DB, databaseType com
 			SELECT CASE c.relkind
 				WHEN 'i' THEN 'index:' || n.nspname || ':' || c.relname
 				WHEN 'I' THEN 'index:' || n.nspname || ':' || c.relname
-				ELSE 'relation:' || n.nspname || ':' || c.relname
+				ELSE 'relation:' || c.relkind::text || ':' || n.nspname || ':' || c.relname
 			END AS object_name
 			  FROM pg_catalog.pg_class c
 			  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
