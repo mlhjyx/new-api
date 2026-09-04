@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -26,14 +28,15 @@ import (
 )
 
 type settlementDispatchRouteCase struct {
-	name             string
-	path             string
-	channelType      int
-	channelSettings  string
-	requestBody      string
-	wantUpstreamPath string
-	upstreamBody     string
-	conversionPolicy *model_setting.ChatCompletionsToResponsesPolicy
+	name              string
+	path              string
+	channelType       int
+	channelSettings   string
+	requestBody       string
+	wantUpstreamPath  string
+	upstreamBody      string
+	upstreamMediaType string
+	conversionPolicy  *model_setting.ChatCompletionsToResponsesPolicy
 }
 
 func TestSettlementDispatchSupportedRoutesUseOneAuthenticatedBindingAndOnePhysicalWire(t *testing.T) {
@@ -82,6 +85,55 @@ func TestSettlementDispatchSupportedRoutesUseOneAuthenticatedBindingAndOnePhysic
 			wantUpstreamPath: "/v1/chat/completions",
 			upstreamBody:     `{"id":"chatcmpl-responses-bridge","object":"chat.completion","created":1710000000,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`,
 		},
+		{
+			name:              "streaming chat completions",
+			path:              "/v1/chat/completions",
+			channelType:       constant.ChannelTypeOpenAI,
+			requestBody:       `{"model":"gpt-4o-mini","stream":true,"messages":[{"role":"user","content":"hello"}]}`,
+			wantUpstreamPath:  "/v1/chat/completions",
+			upstreamBody:      settlementChatStreamBody("chatcmpl-stream"),
+			upstreamMediaType: "text/event-stream",
+		},
+		{
+			name:              "streaming responses",
+			path:              "/v1/responses",
+			channelType:       constant.ChannelTypeOpenAI,
+			requestBody:       `{"model":"gpt-4o-mini","stream":true,"input":"hello"}`,
+			wantUpstreamPath:  "/v1/responses",
+			upstreamBody:      settlementResponsesStreamBody("resp-stream"),
+			upstreamMediaType: "text/event-stream",
+		},
+		{
+			name:              "streaming anthropic messages",
+			path:              "/v1/messages",
+			channelType:       constant.ChannelTypeAnthropic,
+			requestBody:       `{"model":"claude-3-haiku-20240307","stream":true,"max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`,
+			wantUpstreamPath:  "/v1/messages",
+			upstreamBody:      settlementClaudeStreamBody(),
+			upstreamMediaType: "text/event-stream",
+		},
+		{
+			name:              "streaming chat completions via responses",
+			path:              "/v1/chat/completions",
+			channelType:       constant.ChannelTypeOpenAI,
+			requestBody:       `{"model":"gpt-4o-mini","stream":true,"messages":[{"role":"user","content":"hello"}]}`,
+			wantUpstreamPath:  "/v1/responses",
+			upstreamBody:      settlementResponsesStreamBody("resp-chat-stream-bridge"),
+			upstreamMediaType: "text/event-stream",
+			conversionPolicy:  &model_setting.ChatCompletionsToResponsesPolicy{Enabled: true, AllChannels: true, ModelPatterns: []string{"^gpt-4o-mini$"}},
+		},
+		{
+			name:        "streaming responses via chat completions",
+			path:        "/v1/responses",
+			channelType: constant.ChannelTypeAdvancedCustom,
+			channelSettings: `{"advanced_custom":{"advanced_routes":[{` +
+				`"incoming_path":"/v1/responses","upstream_path":"/v1/chat/completions",` +
+				`"converter":"openai_responses_to_openai_chat_completions"}]}}`,
+			requestBody:       `{"model":"gpt-4o-mini","stream":true,"input":"hello"}`,
+			wantUpstreamPath:  "/v1/chat/completions",
+			upstreamBody:      settlementChatStreamBody("chatcmpl-responses-stream-bridge"),
+			upstreamMediaType: "text/event-stream",
+		},
 	}
 
 	for index, testCase := range cases {
@@ -95,7 +147,11 @@ func TestSettlementDispatchSupportedRoutesUseOneAuthenticatedBindingAndOnePhysic
 				if request.Header.Get(common.SettlementReadbackRequestIdHeader) != "" || request.Header.Get(common.SettlementReadbackNonceHeader) != "" {
 					leakedSettlementHeader.Store(true)
 				}
-				writer.Header().Set("Content-Type", "application/json")
+				mediaType := testCase.upstreamMediaType
+				if mediaType == "" {
+					mediaType = "application/json"
+				}
+				writer.Header().Set("Content-Type", mediaType)
 				writer.Header().Set(common.RequestIdKey, "upstream-request-id")
 				_, _ = writer.Write([]byte(testCase.upstreamBody))
 			}))
@@ -325,6 +381,116 @@ func TestSettlementTrailingSlashRedirectIsPreservedOnlyForUnboundTokens(t *testi
 	assert.Zero(t, bindings)
 }
 
+func TestSettlementDispatchStreamUncertaintyLeavesOneWireAndNoReceipt(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+	}{
+		{name: "client disconnect", mode: "client_disconnect"},
+		{name: "upstream interruption before terminal event", mode: "upstream_interruption"},
+		{name: "post-wire log persistence failure", mode: "log_persistence_failure"},
+	}
+
+	for index, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			inboundContext, cancelInbound := context.WithCancel(context.Background())
+			defer cancelInbound()
+			var primaryWires atomic.Int32
+			primary := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				primaryWires.Add(1)
+				writer.Header().Set("Content-Type", "text/event-stream")
+				switch testCase.mode {
+				case "client_disconnect":
+					_, _ = writer.Write([]byte(settlementChatStreamChunk("chatcmpl-client-gone")))
+					if flusher, ok := writer.(http.Flusher); ok {
+						flusher.Flush()
+					}
+					cancelInbound()
+					select {
+					case <-request.Context().Done():
+					case <-time.After(2 * time.Second):
+					}
+				case "upstream_interruption":
+					_, _ = writer.Write([]byte(settlementChatStreamChunk("chatcmpl-truncated")))
+				case "log_persistence_failure":
+					_, _ = writer.Write([]byte(settlementChatStreamBody("chatcmpl-log-failure")))
+				}
+			}))
+			defer primary.Close()
+
+			var fallbackWires atomic.Int32
+			fallback := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				fallbackWires.Add(1)
+				writer.Header().Set("Content-Type", "text/event-stream")
+				_, _ = writer.Write([]byte(settlementChatStreamBody("chatcmpl-forbidden-retry")))
+			}))
+			defer fallback.Close()
+
+			db, engine := newSettlementDispatchIntegrationHarness(t, fmt.Sprintf("stream-uncertain-%d", index), primary.URL, constant.ChannelTypeOpenAI, "")
+			addSettlementFallbackChannel(t, db, fallback.URL)
+			if testCase.mode == "log_persistence_failure" {
+				require.NoError(t, db.Exec(`CREATE TRIGGER settlement_test_log_failure
+					BEFORE INSERT ON logs
+					WHEN NEW.settlement_binding_id IS NOT NULL
+					BEGIN
+						SELECT RAISE(ABORT, 'injected linked log failure');
+					END`).Error)
+			}
+
+			originalRetries := common.RetryTimes
+			common.RetryTimes = 1
+			t.Cleanup(func() { common.RetryTimes = originalRetries })
+
+			requestID := settlementDispatchOpaque(byte(index + 180))
+			nonce := settlementDispatchOpaque(byte(index + 190))
+			response := performSettlementDispatchRequestWithContext(
+				inboundContext,
+				engine,
+				http.MethodPost,
+				"/v1/chat/completions",
+				`{"model":"gpt-4o-mini","stream":true,"messages":[{"role":"user","content":"hello"}]}`,
+				requestID,
+				nonce,
+			)
+			assert.Equal(t, http.StatusOK, response.Code)
+			assert.EqualValues(t, 1, primaryWires.Load())
+			assert.Zero(t, fallbackWires.Load())
+
+			var binding model.SettlementReadbackBinding
+			require.NoError(t, db.Where("dispatch_token_id = ?", 42).First(&binding).Error)
+			assert.Equal(t, model.SettlementReadbackBindingDispatchStarted, binding.State)
+			var dispatchCAS int64
+			require.NoError(t, db.Table("settlement_dispatch_audit").Count(&dispatchCAS).Error)
+			assert.EqualValues(t, 1, dispatchCAS)
+			var linkedLogs int64
+			require.NoError(t, db.Model(&model.Log{}).Where("settlement_binding_id = ?", binding.Id).Count(&linkedLogs).Error)
+			assert.Zero(t, linkedLogs)
+
+			replay := performSettlementDispatchRequest(engine, http.MethodPost, "/v1/chat/completions", `{"model":"gpt-4o-mini","stream":true,"messages":[{"role":"user","content":"hello"}]}`, requestID, nonce)
+			assert.Equal(t, http.StatusConflict, replay.Code)
+			assert.EqualValues(t, 1, primaryWires.Load())
+			assert.Zero(t, fallbackWires.Load())
+		})
+	}
+}
+
+func addSettlementFallbackChannel(t *testing.T, db *gorm.DB, fallbackURL string) {
+	t.Helper()
+	priority := int64(0)
+	require.NoError(t, db.Create(&model.Channel{
+		Id:       8,
+		Type:     constant.ChannelTypeOpenAI,
+		Key:      "local-fallback-key",
+		Status:   common.ChannelStatusEnabled,
+		Name:     "local-fallback",
+		BaseURL:  &fallbackURL,
+		Models:   "gpt-4o-mini",
+		Group:    "default",
+		Priority: &priority,
+	}).Error)
+	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "gpt-4o-mini", ChannelId: 8, Enabled: true, Priority: &priority}).Error)
+}
+
 func newSettlementDispatchIntegrationHarness(t *testing.T, name string, upstreamURL string, channelType int, channelSettings string) (*gorm.DB, *gin.Engine) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -335,6 +501,7 @@ func newSettlementDispatchIntegrationHarness(t *testing.T, name string, upstream
 	originalRedis, originalMemoryCache := common.RedisEnabled, common.MemoryCacheEnabled
 	originalRateLimit := setting.ModelRequestRateLimitEnabled
 	originalSQLitePath, originalMaster := common.SQLitePath, common.IsMasterNode
+	originalStreamingTimeout := constant.StreamingTimeout
 	common.SQLitePath = filepath.Join(t.TempDir(), "settlement-router-"+dsnName+".db") + "?_busy_timeout=30000&_pragma=foreign_keys(1)"
 	common.IsMasterNode = false
 	t.Setenv("SQL_DSN", "")
@@ -357,6 +524,7 @@ func newSettlementDispatchIntegrationHarness(t *testing.T, name string, upstream
 	common.RedisEnabled = false
 	common.MemoryCacheEnabled = false
 	setting.ModelRequestRateLimitEnabled = false
+	constant.StreamingTimeout = 30
 	ratio_setting.InitRatioSettings()
 	service.InitHttpClient()
 	t.Cleanup(func() {
@@ -369,6 +537,7 @@ func newSettlementDispatchIntegrationHarness(t *testing.T, name string, upstream
 		common.RedisEnabled, common.MemoryCacheEnabled = originalRedis, originalMemoryCache
 		setting.ModelRequestRateLimitEnabled = originalRateLimit
 		common.SQLitePath, common.IsMasterNode = originalSQLitePath, originalMaster
+		constant.StreamingTimeout = originalStreamingTimeout
 	})
 
 	require.NoError(t, db.Create(&model.User{
@@ -427,6 +596,17 @@ func performSettlementDispatchRequest(engine http.Handler, method string, target
 	return performSettlementDispatchRequestWithAuthorization(engine, method, target, body, "Bearer sk-settlementdispatch", requestID, nonce)
 }
 
+func performSettlementDispatchRequestWithContext(requestContext context.Context, engine http.Handler, method string, target string, body string, requestID string, nonce string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, target, bytes.NewBufferString(body)).WithContext(requestContext)
+	request.Header.Set("Authorization", "Bearer sk-settlementdispatch")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(common.SettlementReadbackRequestIdHeader, requestID)
+	request.Header.Set(common.SettlementReadbackNonceHeader, nonce)
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, request)
+	return recorder
+}
+
 func performSettlementDispatchRequestWithAuthorization(engine http.Handler, method string, target string, body string, authorization string, requestID string, nonce string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, target, bytes.NewBufferString(body))
 	request.Header.Set("Authorization", authorization)
@@ -448,4 +628,32 @@ func settlementDispatchOpaque(fill byte) string {
 
 func settlementResponsesBody(id string) string {
 	return `{"id":"` + id + `","object":"response","created_at":1710000000,"status":"completed","model":"gpt-4o-mini","output":[{"type":"message","id":"msg-1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":1,"input_tokens_details":{"cached_tokens":0},"output_tokens":1,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":2}}`
+}
+
+func settlementChatStreamChunk(id string) string {
+	return `data: {"id":"` + id + `","object":"chat.completion.chunk","created":1710000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}` + "\n\n"
+}
+
+func settlementChatStreamBody(id string) string {
+	return settlementChatStreamChunk(id) +
+		`data: {"id":"` + id + `","object":"chat.completion.chunk","created":1710000000,"model":"gpt-4o-mini","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}` + "\n\n" +
+		"data: [DONE]\n\n"
+}
+
+func settlementResponsesStreamBody(id string) string {
+	return `data: {"type":"response.output_text.delta","delta":"ok"}` + "\n\n" +
+		`data: {"type":"response.completed","response":{"id":"` + id + `","model":"gpt-4o-mini","status":"completed","usage":{"input_tokens":1,"input_tokens_details":{"cached_tokens":0},"output_tokens":1,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":2}}}` + "\n\n" +
+		"data: [DONE]\n\n"
+}
+
+func settlementClaudeStreamBody() string {
+	return strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"msg-stream","type":"message","role":"assistant","model":"claude-3-haiku-20240307","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
+		`data: {"type":"content_block_stop","index":0}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}`,
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n\n")
 }
