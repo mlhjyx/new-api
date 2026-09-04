@@ -69,6 +69,46 @@ func TestSettlementReadbackReadinessRejectsPostgreSQLForeignKeyActionDrift(t *te
 	runSettlementReadbackExternalForeignKeyDrift(t, db, common.DatabaseTypePostgreSQL)
 }
 
+func TestSettlementReadbackReadinessRejectsPostgreSQLForeignKeySchemaDrift(t *testing.T) {
+	dsn := os.Getenv("TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("UNPROVEN: set TEST_POSTGRES_DSN to run the PostgreSQL foreign-key schema drift gate")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), settlementReadbackPhaseDGormConfig())
+	require.NoError(t, err)
+	for _, table := range []string{"logs", "settlement_readback_bindings", "settlement_readback_credentials"} {
+		if db.Migrator().HasTable(table) {
+			t.Fatalf("refusing foreign-key schema drift test against non-empty PostgreSQL database: table %s already exists", table)
+		}
+	}
+	t.Cleanup(func() {
+		for _, table := range []string{"logs", "settlement_readback_bindings", "settlement_readback_credentials"} {
+			if db.Migrator().HasTable(table) {
+				require.NoError(t, db.Migrator().DropTable(table))
+			}
+		}
+		require.NoError(t, db.Exec("DROP TABLE IF EXISTS settlement_phase_d_foreign.settlement_readback_bindings").Error)
+		require.NoError(t, db.Exec("DROP SCHEMA IF EXISTS settlement_phase_d_foreign").Error)
+		sqlDB, err := db.DB()
+		if err == nil {
+			require.NoError(t, sqlDB.Close())
+		}
+	})
+
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	restoreSettlementReadbackTestTopology(t, db, common.DatabaseTypePostgreSQL)
+	assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+	require.NoError(t, db.Exec("CREATE SCHEMA settlement_phase_d_foreign").Error)
+	require.NoError(t, db.Exec("CREATE TABLE settlement_phase_d_foreign.settlement_readback_bindings (id BIGINT PRIMARY KEY)").Error)
+	require.NoError(t, db.Exec("ALTER TABLE logs DROP CONSTRAINT fk_logs_settlement_binding").Error)
+	require.NoError(t, db.Exec(`ALTER TABLE logs ADD CONSTRAINT fk_logs_settlement_binding
+		FOREIGN KEY (settlement_binding_id)
+		REFERENCES settlement_phase_d_foreign.settlement_readback_bindings(id)
+		ON UPDATE RESTRICT ON DELETE RESTRICT`).Error)
+
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "a cross-schema relation must not satisfy the shared-database contract")
+}
+
 func runSettlementReadbackExternalForeignKeyDrift(t *testing.T, db *gorm.DB, databaseType common.DatabaseType) {
 	t.Helper()
 	for _, table := range []string{"logs", "settlement_readback_bindings", "settlement_readback_credentials"} {
