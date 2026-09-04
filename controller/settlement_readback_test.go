@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -211,6 +212,64 @@ func TestSettlementReadbackReturnsOnlyExactLinkedReceiptOrPending(t *testing.T) 
 	GetSettlementReadback(wrongContext)
 	assert.Equal(t, http.StatusNotFound, wrongRecorder.Code)
 	assert.Empty(t, wrongRecorder.Body.String())
+}
+
+func TestSettlementReadbackClosedReceiptRejectsOversizedOrUnknownOperationalMetadata(t *testing.T) {
+	baseLog := model.Log{
+		Type:             model.LogTypeConsume,
+		ModelName:        "gpt-4o-mini",
+		ChannelId:        7,
+		Quota:            1250,
+		PromptTokens:     10,
+		CompletionTokens: 20,
+	}
+
+	tests := []struct {
+		name  string
+		other string
+	}{
+		{
+			name:  "unknown top-level field",
+			other: `{"usage_semantic":"openai","cache_creation_tokens":0,"cache_tokens":0,"prompt":"must-never-be-parsed"}`,
+		},
+		{
+			name: "metadata beyond the 16 KiB contract",
+			other: `{"usage_semantic":"openai","cache_creation_tokens":0,"cache_tokens":0,"admin_info":{"bounded_legacy":"` +
+				strings.Repeat("x", 16*1024) + `"}}`,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			log := baseLog
+			log.Other = testCase.other
+			_, ok := settlementReadbackClosedReceipt(strings.Repeat("A", 43), &log)
+			assert.False(t, ok)
+		})
+	}
+}
+
+func TestSettlementReadbackClosedReceiptAllowsOnlyBoundedKnownLegacyTopLevelMetadata(t *testing.T) {
+	log := &model.Log{
+		Type:             model.LogTypeConsume,
+		ModelName:        "claude-sonnet",
+		ChannelId:        7,
+		Quota:            1250,
+		PromptTokens:     10,
+		CompletionTokens: 20,
+		Other: `{"usage_semantic":"anthropic","cache_creation_tokens":3,"cache_tokens":4,` +
+			`"model_ratio":1.5,"group_ratio":1,"completion_ratio":5,"cache_ratio":0.1,` +
+			`"model_price":-1,"user_group_ratio":-1,"frt":12,"billing_source":"wallet",` +
+			`"billing_preference":"wallet_only","request_path":"/v1/messages",` +
+			`"request_conversion":["Claude Messages"],"claude":true,` +
+			`"admin_info":{"operational_only":"ignored without recursive parsing"}}`,
+	}
+
+	receipt, ok := settlementReadbackClosedReceipt(strings.Repeat("B", 43), log)
+	require.True(t, ok)
+	assert.Equal(t, "anthropic", receipt.UsageSemantic)
+	assert.EqualValues(t, 3, receipt.CacheCreationTokens)
+	assert.EqualValues(t, 4, receipt.CacheReadTokens)
 }
 
 func TestSettlementReadbackReceiptParsesCanonicalInt64WithoutFloatLoss(t *testing.T) {
