@@ -1,0 +1,7 @@
+# Fork release and corresponding-source controls require the fork owner.
+/.github/workflows/ @mlhjyx
+/Dockerfile @mlhjyx
+/release/ @mlhjyx
+/internal/releasepolicy/ @mlhjyx
+/internal/releaseprovenance/ @mlhjyx
+/cmd/release-provenance/ @mlhjyx

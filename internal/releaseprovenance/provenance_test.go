@@ -105,6 +105,37 @@ func TestGenerateSourceProvenanceFailsClosedForDirtyOrIncompleteInputs(t *testin
 	assert.ErrorContains(t, err, "go.sum")
 }
 
+func TestBuildRecipeDigestCoversTheForkReleaseWorkflow(t *testing.T) {
+	fixture := newGitFixture(t)
+	firstRevision := fixture.releaseCommit(t)
+	firstSBOM := fixture.externalFile(t, "first.spdx.json", []byte(`{"spdxVersion":"SPDX-2.3"}`))
+	first, err := GenerateSource(context.Background(), SourceRequest{
+		RepoDir:        fixture.dir,
+		Revision:       firstRevision,
+		SourceURI:      "https://github.com/mlhjyx/new-api/tree/" + firstRevision,
+		ArchiveURI:     "https://github.com/mlhjyx/new-api/releases/download/source-" + firstRevision + "/new-api-" + firstRevision + ".tar.gz",
+		ArchivePath:    filepath.Join(t.TempDir(), "first.tar.gz"),
+		SourceSBOMPath: firstSBOM,
+	})
+	require.NoError(t, err)
+
+	fixture.write(t, ".github/workflows/growthos-new-api-release.yml", "name: changed release recipe\n")
+	fixture.git(t, "add", ".github/workflows/growthos-new-api-release.yml")
+	fixture.git(t, "commit", "-q", "-m", "ci: change release recipe")
+	secondRevision := fixture.git(t, "rev-parse", "HEAD")
+	secondSBOM := fixture.externalFile(t, "second.spdx.json", []byte(`{"spdxVersion":"SPDX-2.3"}`))
+	second, err := GenerateSource(context.Background(), SourceRequest{
+		RepoDir:        fixture.dir,
+		Revision:       secondRevision,
+		SourceURI:      "https://github.com/mlhjyx/new-api/tree/" + secondRevision,
+		ArchiveURI:     "https://github.com/mlhjyx/new-api/releases/download/source-" + secondRevision + "/new-api-" + secondRevision + ".tar.gz",
+		ArchivePath:    filepath.Join(t.TempDir(), "second.tar.gz"),
+		SourceSBOMPath: secondSBOM,
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Build.RecipeSHA256, second.Build.RecipeSHA256)
+}
+
 func TestGenerateSourceProvenanceRejectsNonDescendantRevision(t *testing.T) {
 	fixture := newGitFixture(t)
 	fixture.releaseCommit(t)
@@ -271,6 +302,7 @@ func (fixture *gitFixture) writeRequiredBuildFiles(t *testing.T) {
 	t.Helper()
 	fixture.write(t, "Dockerfile", "FROM scratch\n")
 	fixture.write(t, ".dockerignore", ".git\n")
+	fixture.write(t, ".github/workflows/growthos-new-api-release.yml", "name: release recipe\n")
 	fixture.write(t, "go.mod", "module example.invalid/release-fixture\n\ngo 1.25.1\n")
 	fixture.write(t, "go.sum", "")
 	fixture.write(t, "web/package.json", "{}\n")

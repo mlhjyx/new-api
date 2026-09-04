@@ -35,7 +35,7 @@ func TestPolicyRejectsAnUnguardedUpstreamPublishJob(t *testing.T) {
 func TestPolicyRejectsMovingActionReferences(t *testing.T) {
 	repo := copyReleasePolicyFixture(t)
 	path := filepath.Join(repo, ".github/workflows/growthos-new-api-pr.yml")
-	replaceOnce(t, path, "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0", "actions/checkout@v7")
+	replaceOnce(t, path, "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6", "oven-sh/setup-bun@v2")
 
 	_, err := VerifyRepository(repo)
 
@@ -49,7 +49,7 @@ func TestPolicyRejectsForkReleaseNamespaceOrMovingTags(t *testing.T) {
 		newValue    string
 		expectedErr string
 	}{
-		{name: "upstream namespace", oldValue: "ghcr.io/mlhjyx/new-api", newValue: "calciumion/new-api", expectedErr: "authorized GHCR namespace"},
+		{name: "upstream namespace", oldValue: "IMAGE_REPOSITORY: ghcr.io/mlhjyx/new-api", newValue: "IMAGE_REPOSITORY: calciumion/new-api", expectedErr: "authorized GHCR namespace"},
 		{name: "latest", oldValue: "sha-${REVISION}", newValue: "latest", expectedErr: "immutable sha tag"},
 		{name: "development dockerfile", oldValue: "file: ./Dockerfile", newValue: "file: ./Dockerfile.dev", expectedErr: "Dockerfile.dev"},
 		{name: "dirty version file", oldValue: "VERSION_VALUE=production-parity-${REVISION}", newValue: "echo production-parity > VERSION", expectedErr: "VERSION"},

@@ -1,0 +1,211 @@
+name: Publish GrowthOS New API exact OCI
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Exact merged 40-character release commit
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  publish-exact-oci:
+    if: github.repository == 'mlhjyx/new-api'
+    runs-on: ubuntu-24.04
+    environment: new-api-exact-release
+    env:
+      IMAGE_REPOSITORY: ghcr.io/mlhjyx/new-api
+      RELEASE_BRANCH: production-parity/settlement-readback-v1
+      PINNED_BASE: bde9b2f44887d34ec54799ae191d50f97914359e
+    steps:
+      - name: Check out requested commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.revision }}
+
+      - name: Admit exact merged release revision
+        env:
+          REQUESTED_REVISION: ${{ inputs.revision }}
+        run: |
+          case "${REQUESTED_REVISION}" in
+            *[!0-9a-f]*|'') exit 1 ;;
+          esac
+          test "${#REQUESTED_REVISION}" -eq 40
+          REVISION=$(git rev-parse HEAD)
+          test "${REVISION}" = "${REQUESTED_REVISION}"
+          git fetch --no-tags origin "refs/heads/${RELEASE_BRANCH}:refs/remotes/origin/${RELEASE_BRANCH}"
+          test "${REVISION}" = "$(git rev-parse "origin/${RELEASE_BRANCH}")"
+          git merge-base --is-ancestor "${PINNED_BASE}" "${REVISION}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          VERSION_VALUE=production-parity-${REVISION}
+          echo "REVISION=${REVISION}" >> "${GITHUB_ENV}"
+          echo "VERSION_VALUE=${VERSION_VALUE}" >> "${GITHUB_ENV}"
+          echo "IMAGE_TAG=sha-${REVISION}" >> "${GITHUB_ENV}"
+          echo "SOURCE_URI=https://github.com/mlhjyx/new-api/tree/${REVISION}" >> "${GITHUB_ENV}"
+          echo "SOURCE_ARCHIVE_URI=https://github.com/mlhjyx/new-api/releases/download/source-${REVISION}/new-api-${REVISION}.tar.gz" >> "${GITHUB_ENV}"
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.26.1'
+          cache: true
+
+      - name: Verify pinned source
+        run: go run ./cmd/release-provenance verify-upstream --repo .
+
+      - name: Generate source dependency SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: .
+          format: spdx-json
+          output-file: ${{ runner.temp }}/new-api-source.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+
+      - name: Prepare corresponding source and provenance
+        run: |
+          go run ./cmd/release-provenance prepare-source \
+            --repo . \
+            --revision "${REVISION}" \
+            --source-uri "${SOURCE_URI}" \
+            --archive-uri "${SOURCE_ARCHIVE_URI}" \
+            --archive-output "${RUNNER_TEMP}/new-api-${REVISION}.tar.gz" \
+            --source-sbom "${RUNNER_TEMP}/new-api-source.spdx.json" \
+            --output "${RUNNER_TEMP}/new-api-source-provenance.json"
+          echo "PATCH_SHA256=$(jq -r .fork.patch_series_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "TREE_SHA256=$(jq -r .fork.patched_tree_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "RECIPE_SHA256=$(jq -r .build.recipe_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "MODULE_SHA256=$(jq -r .build.module_graph_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "SOURCE_ARCHIVE_SHA256=$(jq -r .corresponding_source.archive_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "SOURCE_SBOM_SHA256=$(jq -r .sbom.source_dependency_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build and publish one exact image
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          provenance: mode=max
+          sbom: true
+          build-args: |
+            NEW_API_VERSION=${{ env.VERSION_VALUE }}
+            RELEASE_REVISION=${{ env.REVISION }}
+            UPSTREAM_REVISION=${{ env.PINNED_BASE }}
+            PATCH_SERIES_SHA256=${{ env.PATCH_SHA256 }}
+            PATCHED_TREE_SHA256=${{ env.TREE_SHA256 }}
+            BUILD_RECIPE_SHA256=${{ env.RECIPE_SHA256 }}
+            MODULE_GRAPH_SHA256=${{ env.MODULE_SHA256 }}
+            CORRESPONDING_SOURCE_URI=${{ env.SOURCE_URI }}
+            CORRESPONDING_SOURCE_ARCHIVE_URI=${{ env.SOURCE_ARCHIVE_URI }}
+            CORRESPONDING_SOURCE_ARCHIVE_SHA256=${{ env.SOURCE_ARCHIVE_SHA256 }}
+            SOURCE_SBOM_SHA256=${{ env.SOURCE_SBOM_SHA256 }}
+          labels: |
+            org.opencontainers.image.title=new-api
+            org.opencontainers.image.source=https://github.com/mlhjyx/new-api
+            org.opencontainers.image.revision=${{ env.REVISION }}
+            org.opencontainers.image.licenses=AGPL-3.0-only
+            io.growthos.new-api.upstream.source=https://github.com/QuantumNous/new-api
+            io.growthos.new-api.upstream.revision=${{ env.PINNED_BASE }}
+            io.growthos.new-api.patch-series-sha256=${{ env.PATCH_SHA256 }}
+            io.growthos.new-api.patched-tree-sha256=${{ env.TREE_SHA256 }}
+            io.growthos.new-api.build-recipe-sha256=${{ env.RECIPE_SHA256 }}
+            io.growthos.new-api.module-graph-sha256=${{ env.MODULE_SHA256 }}
+            io.growthos.new-api.corresponding-source.uri=${{ env.SOURCE_URI }}
+            io.growthos.new-api.corresponding-source.sha256=${{ env.SOURCE_ARCHIVE_SHA256 }}
+            io.growthos.new-api.source-sbom.sha256=${{ env.SOURCE_SBOM_SHA256 }}
+
+      - name: Capture exact image identity
+        run: |
+          IMAGE_DIGEST='${{ steps.build.outputs.digest }}'
+          case "${IMAGE_DIGEST}" in
+            sha256:*) ;;
+            *) exit 1 ;;
+          esac
+          echo "IMAGE_DIGEST=${IMAGE_DIGEST}" >> "${GITHUB_ENV}"
+          docker buildx imagetools inspect "${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
+
+      - name: Generate final image SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ${{ env.IMAGE_REPOSITORY }}@${{ env.IMAGE_DIGEST }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/new-api-image.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+
+      - name: Attest image SBOM
+        id: image-sbom-attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_REPOSITORY }}
+          subject-digest: ${{ env.IMAGE_DIGEST }}
+          sbom-path: ${{ runner.temp }}/new-api-image.spdx.json
+          push-to-registry: true
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_REPOSITORY }}
+          subject-digest: ${{ env.IMAGE_DIGEST }}
+          push-to-registry: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign exact digest and finalize receipt
+        run: |
+          cosign sign --yes "${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
+          IMAGE_SBOM_ATTESTATION_SHA256=$(sha256sum '${{ steps.image-sbom-attestation.outputs.bundle-path }}' | awk '{print $1}')
+          go run ./cmd/release-provenance finalize-receipt \
+            --source "${RUNNER_TEMP}/new-api-source-provenance.json" \
+            --repository "${IMAGE_REPOSITORY}" \
+            --digest "${IMAGE_DIGEST}" \
+            --image-sbom-reference "${IMAGE_REPOSITORY}@${IMAGE_DIGEST}" \
+            --image-sbom-attestation-sha256 "${IMAGE_SBOM_ATTESTATION_SHA256}" \
+            --output "${RUNNER_TEMP}/new-api-release-receipt.json"
+          go run ./cmd/release-provenance verify-receipt \
+            --repo . \
+            --receipt "${RUNNER_TEMP}/new-api-release-receipt.json" \
+            --source-sbom "${RUNNER_TEMP}/new-api-source.spdx.json"
+
+      - name: Publish immutable corresponding-source release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "source-${REVISION}" >/dev/null 2>&1; then
+            echo "source release already exists; refusing replacement" >&2
+            exit 1
+          fi
+          gh release create "source-${REVISION}" \
+            --target "${REVISION}" \
+            --title "New API corresponding source ${REVISION}" \
+            --notes "Corresponding Source for ghcr.io/mlhjyx/new-api@${IMAGE_DIGEST}. Upstream identity and license notices are preserved in the attached source archive." \
+            "${RUNNER_TEMP}/new-api-${REVISION}.tar.gz" \
+            "${RUNNER_TEMP}/new-api-source.spdx.json" \
+            "${RUNNER_TEMP}/new-api-source-provenance.json" \
+            "${RUNNER_TEMP}/new-api-image.spdx.json" \
+            "${RUNNER_TEMP}/new-api-release-receipt.json" \
+            '${{ steps.image-sbom-attestation.outputs.bundle-path }}'
+

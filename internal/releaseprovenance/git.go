@@ -17,6 +17,7 @@ import (
 
 var buildRecipeFiles = []string{
 	".dockerignore",
+	".github/workflows/growthos-new-api-release.yml",
 	"Dockerfile",
 	UpstreamManifestPath,
 }
