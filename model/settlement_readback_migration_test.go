@@ -159,6 +159,27 @@ func TestSettlementReadbackReadinessRejectsNonUniqueContractIndexes(t *testing.T
 	}
 }
 
+func TestSettlementReadbackReadinessRejectsPartialUniqueBindingIndex(t *testing.T) {
+	db, err := openSettlementReadbackSQLite("partial-unique-binding-index")
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	restoreSettlementReadbackTestTopology(t, db, common.DatabaseTypeSQLite)
+	assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+
+	require.NoError(t, db.Migrator().DropIndex(&SettlementReadbackBinding{}, "idx_settlement_request"))
+	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX idx_settlement_request
+		ON settlement_readback_bindings(dispatch_token_id, settlement_request_id_sha256)
+		WHERE dispatch_token_id = 999`).Error)
+
+	requestDigest := strings.Repeat("a", 64)
+	require.NoError(t, db.Create(newPhaseDBinding(7, requestDigest, strings.Repeat("b", 64), "gateway-partial-1")).Error)
+	require.NoError(t, db.Create(newPhaseDBinding(7, requestDigest, strings.Repeat("c", 64), "gateway-partial-2")).Error,
+		"the partial index demonstrates that a second physical binding is not database-blocked")
+	assert.False(t, settlementReadbackHasExactUniqueIndex(db, &SettlementReadbackBinding{}, "idx_settlement_request", []string{"dispatch_token_id", "settlement_request_id_sha256"}),
+		"the exact index inspector itself must reject the partial index")
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "a partial unique index must never admit the paid path")
+}
+
 func TestSettlementReadbackReadinessRejectsCredentialColumnDrift(t *testing.T) {
 	tests := []struct {
 		name              string

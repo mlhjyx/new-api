@@ -109,6 +109,104 @@ func TestSettlementReadbackReadinessRejectsPostgreSQLForeignKeySchemaDrift(t *te
 	assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "a cross-schema relation must not satisfy the shared-database contract")
 }
 
+func TestSettlementReadbackReadinessRejectsMySQLPrefixUniqueIndex(t *testing.T) {
+	dsn := os.Getenv("TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("UNPROVEN: set TEST_MYSQL_DSN to run the MySQL prefix-index drift gate")
+	}
+	db, err := gorm.Open(mysql.Open(dsn), settlementReadbackPhaseDGormConfig())
+	require.NoError(t, err)
+	prepareSettlementReadbackExternalDriftDB(t, db, common.DatabaseTypeMySQL)
+
+	require.NoError(t, db.Migrator().DropIndex(&SettlementReadbackBinding{}, "idx_settlement_request"))
+	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX idx_settlement_request
+		ON settlement_readback_bindings(dispatch_token_id, settlement_request_id_sha256(8))`).Error)
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "a prefix-only digest index must not satisfy the exact uniqueness contract")
+}
+
+func TestSettlementReadbackReadinessRejectsPostgreSQLIndexCatalogDrift(t *testing.T) {
+	dsn := os.Getenv("TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("UNPROVEN: set TEST_POSTGRES_DSN to run the PostgreSQL index-catalog drift gates")
+	}
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *gorm.DB)
+	}{
+		{
+			name: "other schema same name",
+			mutate: func(t *testing.T, db *gorm.DB) {
+				require.NoError(t, db.Exec("DROP INDEX idx_settlement_request").Error)
+				require.NoError(t, db.Exec("CREATE SCHEMA settlement_phase_d_index_shadow").Error)
+				t.Cleanup(func() {
+					require.NoError(t, db.Exec("DROP SCHEMA IF EXISTS settlement_phase_d_index_shadow CASCADE").Error)
+				})
+				require.NoError(t, db.Exec(`CREATE TABLE settlement_phase_d_index_shadow.settlement_readback_bindings (
+					dispatch_token_id BIGINT NOT NULL,
+					settlement_request_id_sha256 CHAR(64) NOT NULL
+				)`).Error)
+				require.NoError(t, db.Exec(`CREATE UNIQUE INDEX idx_settlement_request
+					ON settlement_phase_d_index_shadow.settlement_readback_bindings(dispatch_token_id, settlement_request_id_sha256)`).Error)
+			},
+		},
+		{
+			name: "partial",
+			mutate: func(t *testing.T, db *gorm.DB) {
+				require.NoError(t, db.Exec("DROP INDEX idx_settlement_request").Error)
+				require.NoError(t, db.Exec(`CREATE UNIQUE INDEX idx_settlement_request
+					ON settlement_readback_bindings(dispatch_token_id, settlement_request_id_sha256)
+					WHERE dispatch_token_id > 0`).Error)
+			},
+		},
+		{
+			name: "invalid",
+			mutate: func(t *testing.T, db *gorm.DB) {
+				require.NoError(t, db.Exec(`UPDATE pg_index SET indisvalid = false
+					WHERE indexrelid = 'idx_settlement_request'::regclass`).Error)
+			},
+		},
+		{
+			name: "not ready",
+			mutate: func(t *testing.T, db *gorm.DB) {
+				require.NoError(t, db.Exec(`UPDATE pg_index SET indisready = false
+					WHERE indexrelid = 'idx_settlement_request'::regclass`).Error)
+			},
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, err := gorm.Open(postgres.Open(dsn), settlementReadbackPhaseDGormConfig())
+			require.NoError(t, err)
+			prepareSettlementReadbackExternalDriftDB(t, db, common.DatabaseTypePostgreSQL)
+			testCase.mutate(t, db)
+			assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "catalog drift must fail closed")
+		})
+	}
+}
+
+func prepareSettlementReadbackExternalDriftDB(t *testing.T, db *gorm.DB, databaseType common.DatabaseType) {
+	t.Helper()
+	for _, table := range []string{"logs", "settlement_readback_bindings", "settlement_readback_credentials"} {
+		if db.Migrator().HasTable(table) {
+			t.Fatalf("refusing index drift test against non-empty %s database: table %s already exists", databaseType, table)
+		}
+	}
+	t.Cleanup(func() {
+		for _, table := range []string{"logs", "settlement_readback_bindings", "settlement_readback_credentials"} {
+			if db.Migrator().HasTable(table) {
+				require.NoError(t, db.Migrator().DropTable(table))
+			}
+		}
+		sqlDB, err := db.DB()
+		if err == nil {
+			require.NoError(t, sqlDB.Close())
+		}
+	})
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	restoreSettlementReadbackTestTopology(t, db, databaseType)
+	assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+}
+
 func runSettlementReadbackExternalForeignKeyDrift(t *testing.T, db *gorm.DB, databaseType common.DatabaseType) {
 	t.Helper()
 	for _, table := range []string{"logs", "settlement_readback_bindings", "settlement_readback_credentials"} {
