@@ -40,6 +40,7 @@ func TestGenerateSourceProvenanceBindsCleanExactRevision(t *testing.T) {
 	revision := fixture.releaseCommit(t)
 	sourceSBOM := fixture.externalFile(t, "source-sbom.spdx.json", []byte(`{"spdxVersion":"SPDX-2.3"}`))
 	archivePath := filepath.Join(t.TempDir(), "new-api-"+revision+".tar.gz")
+	stages := make([]string, 0, 8)
 
 	provenance, err := GenerateSource(context.Background(), SourceRequest{
 		RepoDir:        fixture.dir,
@@ -48,6 +49,7 @@ func TestGenerateSourceProvenanceBindsCleanExactRevision(t *testing.T) {
 		ArchiveURI:     "https://github.com/mlhjyx/new-api/releases/download/source-" + revision + "/new-api-" + revision + ".tar.gz",
 		ArchivePath:    archivePath,
 		SourceSBOMPath: sourceSBOM,
+		Progress:       func(stage string) { stages = append(stages, stage) },
 	})
 	require.NoError(t, err)
 
@@ -64,6 +66,16 @@ func TestGenerateSourceProvenanceBindsCleanExactRevision(t *testing.T) {
 	assert.Regexp(t, `^[0-9a-f]{64}$`, provenance.Fork.PatchedTreeSHA256)
 	assert.Regexp(t, `^[0-9a-f]{64}$`, provenance.Build.RecipeSHA256)
 	assert.Regexp(t, `^[0-9a-f]{64}$`, provenance.Build.ModuleGraphSHA256)
+	assert.Equal(t, []string{
+		"validate-inputs",
+		"verify-upstream",
+		"compute-fork",
+		"compute-module-graph",
+		"digest-source-sbom",
+		"archive-corresponding-source",
+		"bind-release-licenses",
+		"complete",
+	}, stages)
 
 	bytesOne, err := MarshalSourceProvenance(provenance)
 	require.NoError(t, err)
@@ -308,6 +320,7 @@ func (fixture *gitFixture) writeRequiredBuildFiles(t *testing.T) {
 	fixture.write(t, "web/package.json", "{}\n")
 	fixture.write(t, "web/default/package.json", "{}\n")
 	fixture.write(t, "web/classic/package.json", "{}\n")
+	fixture.write(t, "web/shared/lobe-ui-adapter/package.json", "{}\n")
 	fixture.write(t, "web/bun.lock", "{}\n")
 }
 

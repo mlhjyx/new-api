@@ -101,6 +101,7 @@ type SourceRequest struct {
 	ArchiveURI     string
 	ArchivePath    string
 	SourceSBOMPath string
+	Progress       func(stage string)
 }
 
 func ValidateSourceURIs(revision string, sourceURI string, archiveURI string) error {

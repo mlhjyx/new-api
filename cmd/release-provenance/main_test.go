@@ -44,3 +44,14 @@ func TestWriteExclusiveDoesNotReplaceExistingEvidence(t *testing.T) {
 	require.NoError(t, readErr)
 	assert.Equal(t, "original\n", string(data))
 }
+
+func TestPrepareSourceRejectsAnUnboundedTimeout(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"prepare-source", "--timeout", "0s"}, &stdout, &stderr)
+
+	assert.Equal(t, 2, exitCode)
+	assert.Empty(t, stdout.String())
+	assert.Contains(t, stderr.String(), "timeout must be between 1s and 10m")
+}

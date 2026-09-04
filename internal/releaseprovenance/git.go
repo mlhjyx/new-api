@@ -29,6 +29,7 @@ var moduleGraphFiles = []string{
 	"web/classic/package.json",
 	"web/default/package.json",
 	"web/package.json",
+	"web/shared/lobe-ui-adapter/package.json",
 }
 
 func VerifyPinnedUpstream(ctx context.Context, repoDir string) (UpstreamBase, error) {
@@ -46,6 +47,7 @@ func VerifyPinnedUpstream(ctx context.Context, repoDir string) (UpstreamBase, er
 }
 
 func GenerateSource(ctx context.Context, request SourceRequest) (SourceProvenance, error) {
+	reportProgress(request, "validate-inputs")
 	repoDir, err := filepath.Abs(request.RepoDir)
 	if err != nil {
 		return SourceProvenance{}, err
@@ -63,6 +65,7 @@ func GenerateSource(ctx context.Context, request SourceRequest) (SourceProvenanc
 		return SourceProvenance{}, err
 	}
 
+	reportProgress(request, "verify-upstream")
 	upstream, err := loadUpstreamBase(repoDir)
 	if err != nil {
 		return SourceProvenance{}, err
@@ -74,6 +77,7 @@ func GenerateSource(ctx context.Context, request SourceRequest) (SourceProvenanc
 		return SourceProvenance{}, errors.New("release revision must be a descendant of the approved upstream base")
 	}
 
+	reportProgress(request, "compute-fork")
 	gitTree, err := gitOutput(ctx, repoDir, "rev-parse", request.Revision+"^{tree}")
 	if err != nil {
 		return SourceProvenance{}, err
@@ -90,19 +94,23 @@ func GenerateSource(ctx context.Context, request SourceRequest) (SourceProvenanc
 	if err != nil {
 		return SourceProvenance{}, err
 	}
+	reportProgress(request, "compute-module-graph")
 	moduleGraphSHA, err := digestModuleGraph(ctx, repoDir)
 	if err != nil {
 		return SourceProvenance{}, err
 	}
+	reportProgress(request, "digest-source-sbom")
 	sourceSBOMSHA, err := digestRegularFile(request.SourceSBOMPath)
 	if err != nil {
 		return SourceProvenance{}, fmt.Errorf("source SBOM: %w", err)
 	}
+	reportProgress(request, "archive-corresponding-source")
 	archiveSHA, err := gitArchiveDigest(ctx, repoDir, request.Revision, "new-api-"+request.Revision+"/", request.ArchivePath)
 	if err != nil {
 		return SourceProvenance{}, err
 	}
 
+	reportProgress(request, "bind-release-licenses")
 	releaseLicenseSHA, err := gitObjectDigest(ctx, repoDir, request.Revision, "LICENSE")
 	if err != nil {
 		return SourceProvenance{}, err
@@ -146,7 +154,14 @@ func GenerateSource(ctx context.Context, request SourceRequest) (SourceProvenanc
 	if err := validateSourceProvenance(provenance); err != nil {
 		return SourceProvenance{}, err
 	}
+	reportProgress(request, "complete")
 	return provenance, nil
+}
+
+func reportProgress(request SourceRequest, stage string) {
+	if request.Progress != nil {
+		request.Progress(stage)
+	}
 }
 
 func VerifyReleaseReceipt(ctx context.Context, repoDir string, receipt ReleaseReceipt, sourceSBOMPath string) error {
@@ -449,6 +464,9 @@ func commandOutput(ctx context.Context, repoDir string, name string, args ...str
 	command.Dir = repoDir
 	output, err := command.CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("%s timed out: %w", name, ctx.Err())
+		}
 		return "", fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, boundedText(output))
 	}
 	return strings.TrimSpace(string(output)), nil

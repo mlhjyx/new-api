@@ -8,11 +8,17 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/internal/releaseprovenance"
 )
 
 const maxProvenanceFileBytes = 4 * 1024 * 1024
+
+const defaultCommandTimeout = 5 * time.Minute
+const maximumCommandTimeout = 10 * time.Minute
+
+var errCommandUsage = errors.New("release provenance command usage is invalid")
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -28,7 +34,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	case "verify-upstream":
 		err = runVerifyUpstream(args[1:], stdout)
 	case "prepare-source":
-		err = runPrepareSource(args[1:])
+		err = runPrepareSource(args[1:], stderr)
 	case "finalize-receipt":
 		err = runFinalizeReceipt(args[1:])
 	case "verify-receipt":
@@ -38,6 +44,10 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 2
 	}
 	if err != nil {
+		if errors.Is(err, errCommandUsage) {
+			fmt.Fprintln(stderr, boundedError(err))
+			return 2
+		}
 		fmt.Fprintf(stderr, "release provenance command failed: %s\n", boundedError(err))
 		return 1
 	}
@@ -47,10 +57,16 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 func runVerifyUpstream(args []string, stdout io.Writer) error {
 	flags := newFlagSet("verify-upstream")
 	repo := flags.String("repo", ".", "source repository")
+	timeout := flags.Duration("timeout", defaultCommandTimeout, "bounded command timeout")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	manifest, err := releaseprovenance.VerifyPinnedUpstream(context.Background(), *repo)
+	ctx, cancel, err := boundedContext(*timeout)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	manifest, err := releaseprovenance.VerifyPinnedUpstream(ctx, *repo)
 	if err != nil {
 		return err
 	}
@@ -58,7 +74,7 @@ func runVerifyUpstream(args []string, stdout io.Writer) error {
 	return err
 }
 
-func runPrepareSource(args []string) error {
+func runPrepareSource(args []string, progress io.Writer) error {
 	flags := newFlagSet("prepare-source")
 	repo := flags.String("repo", ".", "source repository")
 	revision := flags.String("revision", "", "exact source revision")
@@ -67,19 +83,28 @@ func runPrepareSource(args []string) error {
 	archiveOutput := flags.String("archive-output", "", "source archive output")
 	sourceSBOM := flags.String("source-sbom", "", "source dependency SBOM")
 	output := flags.String("output", "", "source provenance output")
+	timeout := flags.Duration("timeout", defaultCommandTimeout, "bounded command timeout")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
+	ctx, cancel, err := boundedContext(*timeout)
+	if err != nil {
+		return err
+	}
+	defer cancel()
 	if *output == "" {
 		return errors.New("output is required")
 	}
-	provenance, err := releaseprovenance.GenerateSource(context.Background(), releaseprovenance.SourceRequest{
+	provenance, err := releaseprovenance.GenerateSource(ctx, releaseprovenance.SourceRequest{
 		RepoDir:        *repo,
 		Revision:       *revision,
 		SourceURI:      *sourceURI,
 		ArchiveURI:     *archiveURI,
 		ArchivePath:    *archiveOutput,
 		SourceSBOMPath: *sourceSBOM,
+		Progress: func(stage string) {
+			fmt.Fprintf(progress, "release provenance stage: %s\n", stage)
+		},
 	})
 	if err != nil {
 		return err
@@ -134,6 +159,7 @@ func runVerifyReceipt(args []string) error {
 	repo := flags.String("repo", ".", "source repository")
 	receiptPath := flags.String("receipt", "", "release receipt")
 	sourceSBOM := flags.String("source-sbom", "", "source dependency SBOM")
+	timeout := flags.Duration("timeout", defaultCommandTimeout, "bounded command timeout")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
@@ -145,7 +171,12 @@ func runVerifyReceipt(args []string) error {
 	if err != nil {
 		return err
 	}
-	return releaseprovenance.VerifyReleaseReceipt(context.Background(), *repo, receipt, *sourceSBOM)
+	ctx, cancel, err := boundedContext(*timeout)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	return releaseprovenance.VerifyReleaseReceipt(ctx, *repo, receipt, *sourceSBOM)
 }
 
 func newFlagSet(name string) *flag.FlagSet {
@@ -156,12 +187,20 @@ func newFlagSet(name string) *flag.FlagSet {
 
 func parseFlags(flags *flag.FlagSet, args []string) error {
 	if err := flags.Parse(args); err != nil {
-		return errors.New("invalid command arguments")
+		return fmt.Errorf("%w: invalid command arguments", errCommandUsage)
 	}
 	if flags.NArg() != 0 {
-		return errors.New("unexpected positional arguments")
+		return fmt.Errorf("%w: unexpected positional arguments", errCommandUsage)
 	}
 	return nil
+}
+
+func boundedContext(timeout time.Duration) (context.Context, context.CancelFunc, error) {
+	if timeout < time.Second || timeout > maximumCommandTimeout {
+		return nil, nil, fmt.Errorf("%w: timeout must be between 1s and 10m", errCommandUsage)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return ctx, cancel, nil
 }
 
 func readBoundedRegularFile(path string) ([]byte, error) {
