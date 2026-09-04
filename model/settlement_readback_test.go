@@ -1,6 +1,8 @@
 package model
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -169,4 +171,25 @@ func TestSettlementReadbackCredentialLifecycleEnforcesRotationAndRevocation(t *t
 	require.NoError(t, db.First(&stored, second.Id).Error)
 	assert.Equal(t, SettlementReadbackCredentialRevoked, stored.Status)
 	assert.Equal(t, now+3, stored.RevokedAt)
+}
+
+func TestLoadSettlementReadbackPepperKeyringRequiresPrivateRegularFile(t *testing.T) {
+	raw := []byte("schema=settlement-readback-pepper-keyring/v1\npepper-v1 ACTIVE AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n")
+	directory := t.TempDir()
+	path := filepath.Join(directory, "keyring")
+	require.NoError(t, os.WriteFile(path, raw, 0o600))
+	keyring, err := LoadSettlementReadbackPepperKeyring(path)
+	require.NoError(t, err)
+	version, _, ok := keyring.Active()
+	assert.True(t, ok)
+	assert.Equal(t, "pepper-v1", version)
+
+	require.NoError(t, os.Chmod(path, 0o644))
+	_, err = LoadSettlementReadbackPepperKeyring(path)
+	assert.Error(t, err)
+	require.NoError(t, os.Chmod(path, 0o600))
+	symlink := filepath.Join(directory, "keyring-link")
+	require.NoError(t, os.Symlink(path, symlink))
+	_, err = LoadSettlementReadbackPepperKeyring(symlink)
+	assert.Error(t, err)
 }

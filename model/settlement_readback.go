@@ -7,6 +7,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -36,6 +39,10 @@ const (
 
 var errSettlementReadbackCredentialInvalid = errors.New("invalid settlement readback credential")
 var settlementReadbackPepperVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$`)
+
+func IsSettlementReadbackCredentialInvalid(err error) bool {
+	return errors.Is(err, errSettlementReadbackCredentialInvalid)
+}
 
 type SettlementReadbackPepperKeyring struct {
 	activeVersion string
@@ -103,6 +110,30 @@ func (keyring *SettlementReadbackPepperKeyring) Lookup(version string) (string, 
 	}
 	pepper, ok := keyring.peppers[version]
 	return status, pepper, ok
+}
+
+func LoadSettlementReadbackPepperKeyring(path string) (*SettlementReadbackPepperKeyring, error) {
+	if path == "" || path != strings.TrimSpace(path) || !filepath.IsAbs(path) {
+		return nil, errSettlementReadbackCredentialInvalid
+	}
+	before, err := os.Lstat(path)
+	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm()&0o077 != 0 || before.Size() < 1 || before.Size() > settlementReadbackMaximumKeyringBytes {
+		return nil, errSettlementReadbackCredentialInvalid
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, errSettlementReadbackCredentialInvalid
+	}
+	defer file.Close()
+	after, err := file.Stat()
+	if err != nil || !after.Mode().IsRegular() || !os.SameFile(before, after) || after.Mode().Perm()&0o077 != 0 || after.Size() != before.Size() {
+		return nil, errSettlementReadbackCredentialInvalid
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, settlementReadbackMaximumKeyringBytes+1))
+	if err != nil || len(raw) > settlementReadbackMaximumKeyringBytes || int64(len(raw)) != after.Size() {
+		return nil, errSettlementReadbackCredentialInvalid
+	}
+	return ParseSettlementReadbackPepperKeyring(raw)
 }
 
 // SettlementReadbackCredential is deliberately separate from Token. Its secret
@@ -323,6 +354,25 @@ func GetActiveSettlementReadbackCredential(secret string, pepper string) (*Settl
 		return nil, err
 	}
 	if !credential.MatchesSecret(secret, pepper) {
+		return nil, errSettlementReadbackCredentialInvalid
+	}
+	return &credential, nil
+}
+
+func GetUsableSettlementReadbackCredential(secret string, keyring *SettlementReadbackPepperKeyring, now int64) (*SettlementReadbackCredential, error) {
+	lookupPrefix, ok := settlementReadbackCredentialParts(secret)
+	if !ok || keyring == nil || now < 1 {
+		return nil, errSettlementReadbackCredentialInvalid
+	}
+	var credential SettlementReadbackCredential
+	if err := DB.Where("lookup_prefix = ?", lookupPrefix).First(&credential).Error; err != nil {
+		return nil, err
+	}
+	if !SettlementReadbackCredentialUsableAt(&credential, now) {
+		return nil, errSettlementReadbackCredentialInvalid
+	}
+	_, pepper, ok := keyring.Lookup(credential.PepperVersion)
+	if !ok || !credential.MatchesSecret(secret, pepper) {
 		return nil, errSettlementReadbackCredentialInvalid
 	}
 	return &credential, nil

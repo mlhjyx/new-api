@@ -25,6 +25,13 @@ func SetApiRouter(router *gin.Engine) {
 			settlementReadbackRoute.GET("", controller.GetSettlementReadback)
 			settlementReadbackRoute.GET("/capability", controller.GetSettlementReadbackCapability)
 		}
+		settlementReadbackAdminRoute := apiRouter.Group("/settlement-readback/admin/v1")
+		settlementReadbackAdminRoute.Use(middleware.RootAuth(), middleware.CriticalRateLimit())
+		{
+			settlementReadbackAdminRoute.POST("/credentials", anonymousRequestBodyLimit, controller.CreateSettlementReadbackCredential)
+			settlementReadbackAdminRoute.POST("/credentials/:id/rotate", anonymousRequestBodyLimit, controller.RotateSettlementReadbackCredential)
+			settlementReadbackAdminRoute.POST("/credentials/:id/revoke", controller.RevokeSettlementReadbackCredential)
+		}
 
 		apiRouter.GET("/setup", controller.GetSetup)
 		apiRouter.POST("/setup", anonymousRequestBodyLimit, controller.PostSetup)

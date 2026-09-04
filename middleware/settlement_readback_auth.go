@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -12,10 +13,10 @@ import (
 )
 
 const (
-	SettlementReadbackReaderIDContextKey      = "settlement_readback_reader_id"
-	SettlementReadbackDispatchTokenContextKey = "settlement_readback_dispatch_token_id"
-	settlementReadbackCredentialPepperEnv     = "SETTLEMENT_READBACK_CREDENTIAL_PEPPER"
-	settlementReadbackAuthorizationMaxBytes   = 4096
+	SettlementReadbackReaderIDContextKey             = "settlement_readback_reader_id"
+	SettlementReadbackDispatchTokenContextKey        = "settlement_readback_dispatch_token_id"
+	settlementReadbackCredentialPepperKeyringFileEnv = "SETTLEMENT_READBACK_CREDENTIAL_PEPPER_KEYRING_FILE"
+	settlementReadbackAuthorizationMaxBytes          = 4096
 )
 
 func settlementReadbackDeny(c *gin.Context) {
@@ -38,7 +39,12 @@ func SettlementReadbackAuth() func(c *gin.Context) {
 			settlementReadbackDeny(c)
 			return
 		}
-		credential, err := model.GetActiveSettlementReadbackCredential(secret, os.Getenv(settlementReadbackCredentialPepperEnv))
+		keyring, err := model.LoadSettlementReadbackPepperKeyring(os.Getenv(settlementReadbackCredentialPepperKeyringFileEnv))
+		if err != nil {
+			settlementReadbackDeny(c)
+			return
+		}
+		credential, err := model.GetUsableSettlementReadbackCredential(secret, keyring, time.Now().Unix())
 		if err != nil {
 			settlementReadbackDeny(c)
 			return
