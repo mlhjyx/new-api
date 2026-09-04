@@ -6,18 +6,17 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
-	"math"
 	"net/http"
 	"os"
 	"regexp"
 	"strconv"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"gorm.io/gorm"
 )
 
@@ -30,6 +29,7 @@ var settlementReadbackAdminIntegerBodies = map[string]*regexp.Regexp{
 	"overlap_seconds":   regexp.MustCompile(`^\{[ \t\r\n]*"overlap_seconds"[ \t\r\n]*:[ \t\r\n]*([1-9][0-9]{0,9})[ \t\r\n]*\}$`),
 }
 var settlementReadbackModelIdentifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`)
+var settlementReadbackCanonicalNonnegativeInteger = regexp.MustCompile(`^(?:0|[1-9][0-9]*)$`)
 
 type settlementReadbackCapabilityResponse struct {
 	SchemaVersion string `json:"schema_version"`
@@ -240,28 +240,47 @@ func settlementReadbackValueDigest(value string) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func settlementReadbackNonnegativeInteger(value interface{}) (int64, bool) {
-	number, ok := value.(float64)
-	if !ok || number < 0 || number > math.MaxInt64 || number != math.Trunc(number) {
+func settlementReadbackNonnegativeInteger(raw string) (int64, bool) {
+	if !settlementReadbackCanonicalNonnegativeInteger.MatchString(raw) {
 		return 0, false
 	}
-	return int64(number), true
+	number, err := strconv.ParseInt(raw, 10, 64)
+	return number, err == nil && number >= 0 && strconv.FormatInt(number, 10) == raw
 }
 
 func settlementReadbackClosedReceipt(requestID string, log *model.Log) (settlementReadbackReceipt, bool) {
 	if log == nil || log.Type != model.LogTypeConsume || log.ChannelId < 1 || log.Quota < 0 || log.PromptTokens < 0 || log.CompletionTokens < 0 || len(log.ModelName) < 1 || len(log.ModelName) > 191 || !settlementReadbackModelIdentifier.MatchString(log.ModelName) {
 		return settlementReadbackReceipt{}, false
 	}
-	var other map[string]interface{}
-	if err := common.Unmarshal([]byte(log.Other), &other); err != nil {
+	if !gjson.Valid(log.Other) {
 		return settlementReadbackReceipt{}, false
 	}
-	usageSemantic, ok := other["usage_semantic"].(string)
-	if !ok || (usageSemantic != "openai" && usageSemantic != "anthropic") {
+	parsed := gjson.Parse(log.Other)
+	if !parsed.IsObject() {
 		return settlementReadbackReceipt{}, false
 	}
-	cacheCreation, creationOK := settlementReadbackNonnegativeInteger(other["cache_creation_tokens"])
-	cacheRead, readOK := settlementReadbackNonnegativeInteger(other["cache_tokens"])
+	values := map[string]gjson.Result{}
+	validFields := true
+	parsed.ForEach(func(key, value gjson.Result) bool {
+		name := key.String()
+		if name == "usage_semantic" || name == "cache_creation_tokens" || name == "cache_tokens" {
+			if _, duplicate := values[name]; duplicate {
+				validFields = false
+				return false
+			}
+			values[name] = value
+		}
+		return true
+	})
+	if !validFields || len(values) != 3 || values["usage_semantic"].Type != gjson.String {
+		return settlementReadbackReceipt{}, false
+	}
+	usageSemantic := values["usage_semantic"].String()
+	if usageSemantic != "openai" && usageSemantic != "anthropic" {
+		return settlementReadbackReceipt{}, false
+	}
+	cacheCreation, creationOK := settlementReadbackNonnegativeInteger(values["cache_creation_tokens"].Raw)
+	cacheRead, readOK := settlementReadbackNonnegativeInteger(values["cache_tokens"].Raw)
 	if !creationOK || !readOK {
 		return settlementReadbackReceipt{}, false
 	}

@@ -458,7 +458,11 @@ func LinkSettlementReadbackConsumeLog(db *gorm.DB, bindingID int, log *Log) erro
 		if err := tx.Create(log).Error; err != nil {
 			return err
 		}
-		return tx.Model(&SettlementReadbackBinding{}).Where("id = ? AND state = ?", bindingID, SettlementReadbackBindingDispatchStarted).Updates(map[string]interface{}{"state": SettlementReadbackBindingLogLinked, "log_linked_at": time.Now().Unix()}).Error
+		result := tx.Model(&SettlementReadbackBinding{}).Where("id = ? AND state = ?", bindingID, SettlementReadbackBindingDispatchStarted).Updates(map[string]interface{}{"state": SettlementReadbackBindingLogLinked, "log_linked_at": time.Now().Unix()})
+		if result.Error != nil || result.RowsAffected != 1 {
+			return errSettlementReadbackIntegrity
+		}
+		return nil
 	})
 }
 

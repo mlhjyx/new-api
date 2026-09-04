@@ -272,3 +272,29 @@ func TestSettlementReadbackLogLinkFailureRollsBackWithoutChoosingAnotherLog(t *t
 	orphan := &Log{Type: LogTypeConsume, TokenId: 9, SettlementBindingId: &missingBindingID, CreatedAt: 5}
 	assert.Error(t, db.Create(orphan).Error)
 }
+
+func TestSettlementReadbackLogLinkRollsBackWhenFinalStateCasLoses(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-state-cas?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	binding := &SettlementReadbackBinding{DispatchTokenId: 9, SettlementRequestIdSha256: strings.Repeat("3", 64), SettlementNonceSha256: strings.Repeat("4", 64), GatewayRequestId: "gateway", State: SettlementReadbackBindingBound, CreatedAt: 1}
+	require.NoError(t, db.Create(binding).Error)
+	require.True(t, BeginSettlementReadbackDispatch(db, binding.Id))
+	require.NoError(t, db.Exec(`CREATE TRIGGER settlement_test_state_drift
+      AFTER INSERT ON logs
+      WHEN NEW.settlement_binding_id IS NOT NULL
+      BEGIN
+        UPDATE settlement_readback_bindings SET state = 'BOUND' WHERE id = NEW.settlement_binding_id;
+      END`).Error)
+
+	log := &Log{Type: LogTypeConsume, TokenId: 9, SettlementBindingId: &binding.Id, CreatedAt: 2}
+	err = LinkSettlementReadbackConsumeLog(db, binding.Id, log)
+	assert.Error(t, err)
+	assert.True(t, IsSettlementReadbackIntegrityError(err))
+	var count int64
+	require.NoError(t, db.Model(&Log{}).Where("settlement_binding_id = ?", binding.Id).Count(&count).Error)
+	assert.Zero(t, count)
+	var stored SettlementReadbackBinding
+	require.NoError(t, db.First(&stored, binding.Id).Error)
+	assert.Equal(t, SettlementReadbackBindingDispatchStarted, stored.State)
+}

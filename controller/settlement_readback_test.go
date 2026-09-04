@@ -212,3 +212,25 @@ func TestSettlementReadbackReturnsOnlyExactLinkedReceiptOrPending(t *testing.T) 
 	assert.Equal(t, http.StatusNotFound, wrongRecorder.Code)
 	assert.Empty(t, wrongRecorder.Body.String())
 }
+
+func TestSettlementReadbackReceiptParsesCanonicalInt64WithoutFloatLoss(t *testing.T) {
+	base := model.Log{Type: model.LogTypeConsume, ChannelId: 1, ModelName: "model-v1", Quota: 0, PromptTokens: 1, CompletionTokens: 1}
+	base.Other = `{"usage_semantic":"openai","cache_creation_tokens":9007199254740993,"cache_tokens":9223372036854775807,"unrelated":"not-projected"}`
+	receipt, ok := settlementReadbackClosedReceipt("request", &base)
+	require.True(t, ok)
+	assert.Equal(t, int64(9_007_199_254_740_993), receipt.CacheCreationTokens)
+	assert.Equal(t, int64(9_223_372_036_854_775_807), receipt.CacheReadTokens)
+
+	for _, other := range []string{
+		`{"usage_semantic":"openai","cache_creation_tokens":1e3,"cache_tokens":0}`,
+		`{"usage_semantic":"openai","cache_creation_tokens":-1,"cache_tokens":0}`,
+		`{"usage_semantic":"openai","cache_creation_tokens":01,"cache_tokens":0}`,
+		`{"usage_semantic":"openai","cache_creation_tokens":9223372036854775808,"cache_tokens":0}`,
+		`{"usage_semantic":"openai","usage_semantic":"anthropic","cache_creation_tokens":0,"cache_tokens":0}`,
+	} {
+		candidate := base
+		candidate.Other = other
+		_, ok := settlementReadbackClosedReceipt("request", &candidate)
+		assert.False(t, ok, other)
+	}
+}
