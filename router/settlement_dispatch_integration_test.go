@@ -183,6 +183,98 @@ func TestSettlementDispatchRejectsUnsupportedAndAmbiguousRouterPathsWithoutRedir
 	assert.Zero(t, bindings)
 }
 
+func TestSettlementDispatchRejectsAdaptersOutsideCommonCASWithoutFallbackWire(t *testing.T) {
+	tests := []struct {
+		name            string
+		channelType     int
+		channelKey      string
+		channelSettings func(string) string
+	}{
+		{
+			name:        "xunfei websocket in DoResponse",
+			channelType: constant.ChannelTypeXunfei,
+			channelKey:  "test-app|test-signing-material|test-api-key",
+		},
+		{
+			name:        "aws sdk InvokeModel in DoResponse",
+			channelType: constant.ChannelTypeAws,
+			channelKey:  "test-access|test-signing-material|us-east-1",
+			channelSettings: func(proxyURL string) string {
+				return `{"proxy":"` + proxyURL + `"}`
+			},
+		},
+	}
+
+	for index, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			var unsupportedPhysicalActions atomic.Int32
+			unsupportedCapture := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				unsupportedPhysicalActions.Add(1)
+				writer.WriteHeader(http.StatusBadGateway)
+			}))
+			defer unsupportedCapture.Close()
+
+			var fallbackWires atomic.Int32
+			fallback := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				fallbackWires.Add(1)
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = writer.Write([]byte(`{"id":"chatcmpl-fallback","object":"chat.completion","created":1710000000,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"must-not-run"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+			}))
+			defer fallback.Close()
+
+			db, engine := newSettlementDispatchIntegrationHarness(t, fmt.Sprintf("adapter-deny-%d", index), unsupportedCapture.URL, testCase.channelType, "")
+			runtimeSettings := ""
+			if testCase.channelSettings != nil {
+				runtimeSettings = testCase.channelSettings(unsupportedCapture.URL)
+			}
+			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 7).Updates(map[string]any{
+				"key":     testCase.channelKey,
+				"setting": runtimeSettings,
+			}).Error)
+			fallbackURL := fallback.URL
+			fallbackPriority := int64(0)
+			require.NoError(t, db.Create(&model.Channel{
+				Id:       8,
+				Type:     constant.ChannelTypeOpenAI,
+				Key:      "local-fallback-key",
+				Status:   common.ChannelStatusEnabled,
+				Name:     "local-fallback",
+				BaseURL:  &fallbackURL,
+				Models:   "gpt-4o-mini",
+				Group:    "default",
+				Priority: &fallbackPriority,
+			}).Error)
+			require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "gpt-4o-mini", ChannelId: 8, Enabled: true, Priority: &fallbackPriority}).Error)
+
+			originalRetries := common.RetryTimes
+			common.RetryTimes = 1
+			t.Cleanup(func() { common.RetryTimes = originalRetries })
+
+			requestID := settlementDispatchOpaque(byte(index + 150))
+			nonce := settlementDispatchOpaque(byte(index + 160))
+			response := performSettlementDispatchRequest(engine, http.MethodPost, "/v1/chat/completions", `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`, requestID, nonce)
+			assert.Equal(t, http.StatusServiceUnavailable, response.Code, response.Body.String())
+			assert.Contains(t, response.Body.String(), `"code":"settlement_dispatch_fence_unavailable"`)
+			assert.Zero(t, unsupportedPhysicalActions.Load())
+			assert.Zero(t, fallbackWires.Load(), "an unfenced adapter must not fall through to a second channel")
+
+			var dispatchCAS int64
+			require.NoError(t, db.Table("settlement_dispatch_audit").Count(&dispatchCAS).Error)
+			assert.Zero(t, dispatchCAS)
+			var linkedLogs int64
+			require.NoError(t, db.Model(&model.Log{}).Where("settlement_binding_id IS NOT NULL").Count(&linkedLogs).Error)
+			assert.Zero(t, linkedLogs)
+
+			replay := performSettlementDispatchRequest(engine, http.MethodPost, "/v1/chat/completions", `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`, requestID, nonce)
+			assert.Equal(t, http.StatusServiceUnavailable, replay.Code, replay.Body.String())
+			assert.Zero(t, unsupportedPhysicalActions.Load())
+			assert.Zero(t, fallbackWires.Load())
+			require.NoError(t, db.Table("settlement_dispatch_audit").Count(&dispatchCAS).Error)
+			assert.Zero(t, dispatchCAS)
+		})
+	}
+}
+
 func newSettlementDispatchIntegrationHarness(t *testing.T, name string, upstreamURL string, channelType int, channelSettings string) (*gorm.DB, *gin.Engine) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -200,7 +292,7 @@ func newSettlementDispatchIntegrationHarness(t *testing.T, name string, upstream
 	require.NoError(t, model.InitDB())
 	require.NoError(t, model.InitLogDB())
 	db := model.DB
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}))
 	require.NoError(t, model.EnsureSettlementReadbackSharedSchema(db))
 	require.NoError(t, db.Exec(`CREATE TABLE settlement_dispatch_audit (id integer primary key autoincrement, binding_id integer not null)`).Error)
 	require.NoError(t, db.Exec(`CREATE TRIGGER settlement_dispatch_started_audit
@@ -268,6 +360,11 @@ func newSettlementDispatchIntegrationHarness(t *testing.T, name string, upstream
 		Group:         "default",
 		OtherSettings: channelSettings,
 	}).Error)
+	primaryPriority := int64(10)
+	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 7).Update("priority", primaryPriority).Error)
+	for _, modelName := range []string{"gpt-4o-mini", "claude-3-haiku-20240307"} {
+		require.NoError(t, db.Create(&model.Ability{Group: "default", Model: modelName, ChannelId: 7, Enabled: true, Priority: &primaryPriority}).Error)
+	}
 
 	engine := gin.New()
 	engine.Use(middleware.RequestId())
@@ -278,7 +375,7 @@ func newSettlementDispatchIntegrationHarness(t *testing.T, name string, upstream
 
 func performSettlementDispatchRequest(engine http.Handler, method string, target string, body string, requestID string, nonce string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, target, bytes.NewBufferString(body))
-	request.Header.Set("Authorization", "Bearer sk-settlementdispatch-7")
+	request.Header.Set("Authorization", "Bearer sk-settlementdispatch")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(common.SettlementReadbackRequestIdHeader, requestID)
 	request.Header.Set(common.SettlementReadbackNonceHeader, nonce)
