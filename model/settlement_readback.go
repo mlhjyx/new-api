@@ -40,6 +40,8 @@ const (
 var errSettlementReadbackCredentialInvalid = errors.New("invalid settlement readback credential")
 var errSettlementReadbackIntegrity = errors.New("settlement readback integrity invalid")
 var settlementReadbackPepperVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$`)
+var settlementReadbackGatewayRequestID = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
+var settlementReadbackSha256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func IsSettlementReadbackCredentialInvalid(err error) bool {
 	return errors.Is(err, errSettlementReadbackCredentialInvalid)
@@ -436,6 +438,53 @@ func HasActiveSettlementReadbackCredential(dispatchTokenID int) (bool, error) {
 		Where("dispatch_token_id = ? AND status = ?", dispatchTokenID, SettlementReadbackCredentialActive).
 		Count(&count).Error
 	return count > 0, err
+}
+
+func CreateOrGetSettlementReadbackBinding(db *gorm.DB, dispatchTokenID int, requestDigest string, nonceDigest string, gatewayRequestID string) (*SettlementReadbackBinding, bool, error) {
+	if db == nil || dispatchTokenID < 1 || !settlementReadbackSha256.MatchString(requestDigest) || !settlementReadbackSha256.MatchString(nonceDigest) || !settlementReadbackGatewayRequestID.MatchString(gatewayRequestID) {
+		return nil, false, errSettlementReadbackCredentialInvalid
+	}
+	var binding *SettlementReadbackBinding
+	replay := false
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var token Token
+		if err := lockForUpdate(tx).Where("id = ?", dispatchTokenID).First(&token).Error; err != nil || token.Status != common.TokenStatusEnabled {
+			return errSettlementReadbackCredentialInvalid
+		}
+		var existing SettlementReadbackBinding
+		err := lockForUpdate(tx).Where("dispatch_token_id = ? AND settlement_request_id_sha256 = ?", dispatchTokenID, requestDigest).First(&existing).Error
+		if err == nil {
+			if existing.SettlementNonceSha256 != nonceDigest || existing.State != SettlementReadbackBindingBound {
+				return errSettlementReadbackCredentialInvalid
+			}
+			binding, replay = &existing, true
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		var nonceCount int64
+		if err := tx.Model(&SettlementReadbackBinding{}).Where("dispatch_token_id = ? AND settlement_nonce_sha256 = ?", dispatchTokenID, nonceDigest).Count(&nonceCount).Error; err != nil {
+			return err
+		}
+		if nonceCount != 0 {
+			return errSettlementReadbackCredentialInvalid
+		}
+		created := &SettlementReadbackBinding{
+			DispatchTokenId:           dispatchTokenID,
+			SettlementRequestIdSha256: requestDigest,
+			SettlementNonceSha256:     nonceDigest,
+			GatewayRequestId:          gatewayRequestID,
+			State:                     SettlementReadbackBindingBound,
+			CreatedAt:                 time.Now().Unix(),
+		}
+		if err := tx.Create(created).Error; err != nil {
+			return err
+		}
+		binding = created
+		return nil
+	})
+	return binding, replay, err
 }
 
 func BeginSettlementReadbackDispatch(db *gorm.DB, bindingID int) bool {
