@@ -213,11 +213,116 @@ func settlementReadbackSchemaReady(db *gorm.DB) bool {
 		migrator.HasTable(&SettlementReadbackBinding{}) &&
 		migrator.HasTable(&Log{}) &&
 		migrator.HasColumn(&Log{}, "SettlementBindingId") &&
+		settlementReadbackHasExactColumns(db, &SettlementReadbackCredential{}, []settlementReadbackColumnContract{
+			{name: "lookup_prefix", semanticType: "varchar", length: 32},
+			{name: "secret_digest", semanticType: "char", length: 64},
+			{name: "pepper_version", semanticType: "varchar", length: 64},
+			{name: "dispatch_token_id", semanticType: "signed64"},
+			{name: "status", semanticType: "signed64"},
+			{name: "created_at", semanticType: "signed64"},
+			{name: "revoked_at", semanticType: "signed64"},
+			{name: "rotation_ends_at", semanticType: "signed64"},
+		}) &&
+		settlementReadbackHasExactColumns(db, &SettlementReadbackBinding{}, []settlementReadbackColumnContract{
+			{name: "dispatch_token_id", semanticType: "signed64"},
+			{name: "settlement_request_id_sha256", semanticType: "char", length: 64},
+			{name: "settlement_nonce_sha256", semanticType: "char", length: 64},
+			{name: "gateway_request_id", semanticType: "varchar", length: 64},
+			{name: "state", semanticType: "varchar", length: 32},
+			{name: "created_at", semanticType: "signed64"},
+			{name: "log_linked_at", semanticType: "signed64"},
+		}) &&
+		settlementReadbackHasExactColumns(db, &Log{}, []settlementReadbackColumnContract{
+			{name: "settlement_binding_id", semanticType: "signed64", nullable: true},
+		}) &&
 		settlementReadbackHasExactUniqueIndex(db, &SettlementReadbackCredential{}, "idx_settlement_readback_credentials_lookup_prefix", []string{"lookup_prefix"}) &&
 		settlementReadbackHasExactUniqueIndex(db, &SettlementReadbackBinding{}, "idx_settlement_request", []string{"dispatch_token_id", "settlement_request_id_sha256"}) &&
 		settlementReadbackHasExactUniqueIndex(db, &SettlementReadbackBinding{}, "idx_settlement_nonce", []string{"dispatch_token_id", "settlement_nonce_sha256"}) &&
 		settlementReadbackHasExactUniqueIndex(db, &Log{}, "idx_logs_settlement_binding_id", []string{"settlement_binding_id"}) &&
 		migrator.HasConstraint(&settlementReadbackLinkedLog{}, "SettlementBinding")
+}
+
+type settlementReadbackColumnContract struct {
+	name         string
+	semanticType string
+	length       int64
+	nullable     bool
+}
+
+func settlementReadbackHasExactColumns(db *gorm.DB, table any, contracts []settlementReadbackColumnContract) bool {
+	if db == nil || len(contracts) == 0 {
+		return false
+	}
+	columnTypes, err := db.Migrator().ColumnTypes(table)
+	if err != nil {
+		return false
+	}
+	columns := make(map[string]gorm.ColumnType, len(columnTypes))
+	for _, columnType := range columnTypes {
+		columns[strings.ToLower(columnType.Name())] = columnType
+	}
+	for _, contract := range contracts {
+		columnType, ok := columns[contract.name]
+		if !ok || !settlementReadbackColumnTypeMatches(db.Dialector.Name(), columnType, contract) {
+			return false
+		}
+		nullable, known := settlementReadbackColumnNullable(db, table, columnType)
+		if !known || nullable != contract.nullable {
+			return false
+		}
+	}
+	return true
+}
+
+func settlementReadbackColumnTypeMatches(dialect string, columnType gorm.ColumnType, contract settlementReadbackColumnContract) bool {
+	actual := strings.ToLower(columnType.DatabaseTypeName())
+	switch contract.semanticType {
+	case "signed64":
+		switch dialect {
+		case "sqlite":
+			return actual == "integer" || actual == "bigint"
+		case "mysql":
+			return actual == "bigint"
+		case "postgres":
+			return actual == "int8" || actual == "bigint"
+		default:
+			return false
+		}
+	case "char":
+		if actual != "char" && actual != "bpchar" && actual != "character" {
+			return false
+		}
+	case "varchar":
+		if actual != "varchar" && actual != "character varying" {
+			return false
+		}
+	default:
+		return false
+	}
+	length, known := columnType.Length()
+	return known && length == contract.length
+}
+
+func settlementReadbackColumnNullable(db *gorm.DB, table any, columnType gorm.ColumnType) (bool, bool) {
+	if db.Dialector.Name() != "sqlite" {
+		return columnType.Nullable()
+	}
+	statement := &gorm.Statement{DB: db}
+	if err := statement.Parse(table); err != nil || statement.Schema == nil {
+		return false, false
+	}
+	var rows []struct {
+		NotNull int `gorm:"column:not_null"`
+	}
+	err := db.Raw(
+		`SELECT "notnull" AS not_null FROM pragma_table_info(?) WHERE name = ?`,
+		statement.Schema.Table,
+		columnType.Name(),
+	).Scan(&rows).Error
+	if err != nil || len(rows) != 1 {
+		return false, false
+	}
+	return rows[0].NotNull == 0, true
 }
 
 func settlementReadbackHasExactUniqueIndex(db *gorm.DB, table any, indexName string, expectedColumns []string) bool {

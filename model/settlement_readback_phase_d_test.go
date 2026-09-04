@@ -160,7 +160,7 @@ func assertSettlementReadbackColumn(t *testing.T, db *gorm.DB, table any, databa
 			default:
 				t.Fatalf("unknown semantic type %q", semanticType)
 			}
-			actualNullable, known := settlementReadbackColumnNullable(db, table, databaseType, name, columnType)
+			actualNullable, known := phaseDColumnNullable(db, table, databaseType, name, columnType)
 			require.Truef(t, known, "column %s nullability must be introspectable", name)
 			assert.Equal(t, nullable, actualNullable, "column %s has wrong nullability", name)
 			return
@@ -169,7 +169,7 @@ func assertSettlementReadbackColumn(t *testing.T, db *gorm.DB, table any, databa
 	t.Fatalf("column %s not found", name)
 }
 
-func settlementReadbackColumnNullable(db *gorm.DB, table any, databaseType common.DatabaseType, name string, columnType gorm.ColumnType) (bool, bool) {
+func phaseDColumnNullable(db *gorm.DB, table any, databaseType common.DatabaseType, name string, columnType gorm.ColumnType) (bool, bool) {
 	if databaseType != common.DatabaseTypeSQLite {
 		return columnType.Nullable()
 	}
