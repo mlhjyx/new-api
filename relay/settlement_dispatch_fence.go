@@ -41,9 +41,13 @@ func ValidateSettlementDispatchPreflight(c *gin.Context, info *relaycommon.Relay
 	if info == nil || info.SettlementBindingId == 0 {
 		return nil
 	}
-	info.InitChannelMeta(c)
-	adaptor := GetAdaptor(info.ApiType)
-	if fenceError := requireSettlementDispatchFence(c, info, adaptor); fenceError != nil {
+	probe := *info
+	probe.Request = nil
+	probe.ChannelMeta = nil
+	probe.SettlementDispatchFence = ""
+	probe.InitChannelMeta(c)
+	adaptor := GetAdaptor(probe.ApiType)
+	if fenceError := requireSettlementDispatchFence(c, &probe, adaptor); fenceError != nil {
 		return fenceError
 	}
 	if info.Request == nil {
