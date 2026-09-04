@@ -63,6 +63,13 @@ func runSettlementReadbackExternalOwnershipGuardTest(
 	assert.Error(t, validateSettlementReadbackExternalOwnership(owned, databaseType, ownershipID, ack))
 	require.NoError(t, owned.Exec("DROP TABLE settlement_readback_unrelated_preexisting_object").Error)
 	require.NoError(t, validateSettlementReadbackExternalOwnership(owned, databaseType, ownershipID, ack))
+	if databaseType == common.DatabaseTypePostgreSQL {
+		require.NoError(t, owned.Exec("CREATE SCHEMA settlement_readback_unrelated_empty_schema").Error)
+		assert.Error(t, validateSettlementReadbackExternalOwnership(owned, databaseType, ownershipID, ack),
+			"complete database inventory must reject an unrelated empty schema")
+		require.NoError(t, owned.Exec("DROP SCHEMA settlement_readback_unrelated_empty_schema").Error)
+		require.NoError(t, validateSettlementReadbackExternalOwnership(owned, databaseType, ownershipID, ack))
+	}
 
 	unowned, err := open(unownedDSN)
 	require.NoError(t, err)
