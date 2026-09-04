@@ -1,0 +1,17 @@
+common/custom-event.go:60:37: encode passes lock by value: github.com/QuantumNous/new-api/common.CustomEvent contains sync.Mutex
+common/custom-event.go:73:9: Render passes lock by value: github.com/QuantumNous/new-api/common.CustomEvent contains sync.Mutex
+common/custom-event.go:75:19: call of encode copies lock value: github.com/QuantumNous/new-api/common.CustomEvent contains sync.Mutex
+common/custom-event.go:78:9: WriteContentType passes lock by value: github.com/QuantumNous/new-api/common.CustomEvent contains sync.Mutex
+common/email_test.go:367:43: address format "%s:%d" does not work with IPv6
+relay/channel/baidu/adaptor.go:30:2: unreachable code
+relay/channel/cohere/adaptor.go:29:2: unreachable code
+relay/channel/cloudflare/adaptor.go:31:2: unreachable code
+relay/channel/jina/adaptor.go:31:2: unreachable code
+relay/channel/dify/adaptor.go:36:2: unreachable code
+relay/channel/dify/adaptor.go:112:2: unreachable code
+relay/channel/mistral/adaptor.go:28:2: unreachable code
+relay/channel/mokaai/adaptor.go:30:2: unreachable code
+relay/channel/palm/adaptor.go:29:2: unreachable code
+relay/channel/tencent/adaptor.go:37:2: unreachable code
+relay/channel/zhipu/adaptor.go:29:2: unreachable code
+relay/channel/xunfei/adaptor.go:29:2: unreachable code

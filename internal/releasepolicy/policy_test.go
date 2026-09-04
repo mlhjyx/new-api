@@ -24,6 +24,56 @@ func TestRepositoryWorkflowsHaveOneFailClosedForkReleasePath(t *testing.T) {
 	assert.Equal(t, "scratch", report.RuntimeBase)
 	assert.True(t, report.BoundedModuleDownload)
 	assert.True(t, report.ChecksummedModuleProxy)
+	assert.True(t, report.LicenseHoldFailClosed)
+	assert.True(t, report.ProtectedIdentityPreserved)
+	assert.True(t, report.PullRequestTemplatePreserved)
+	assert.True(t, report.AIAssistanceDisclosed)
+	assert.True(t, report.SecretScanPinned)
+	assert.True(t, report.SourceAndImageSBOMChecks)
+	assert.True(t, report.CorrespondingSourceSmoke)
+	assert.True(t, report.GoVetBaselineFailClosed)
+}
+
+func TestPolicyRejectsProtectedProjectIdentityDrift(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		oldValue    string
+		newValue    string
+		expectedErr string
+	}{
+		{name: "module identity", path: "go.mod", oldValue: "module github.com/QuantumNous/new-api", newValue: "module github.com/mlhjyx/new-api", expectedErr: "module identity"},
+		{name: "upstream README", path: "README.md", oldValue: "Built with ❤️ by QuantumNous", newValue: "Built by GrowthOS", expectedErr: "README"},
+		{name: "upstream PR template", path: ".github/PULL_REQUEST_TEMPLATE.md", oldValue: "# ⚠️ 提交说明 / PR Notice", newValue: "# Fork PR", expectedErr: "pull request template"},
+		{name: "AI disclosure", path: "release/pull-request-description.md", oldValue: "OpenAI Codex", newValue: "automated tooling", expectedErr: "AI assistance"},
+		{name: "secret allowlist", path: ".gitleaksignore", oldValue: "Dockerfile:generic-api-key:149", newValue: "Dockerfile:generic-api-key:*", expectedErr: "secret allowlist"},
+		{name: "vet baseline", path: "release/go-vet-baseline.txt", oldValue: "relay/channel/baidu/adaptor.go:30:2: unreachable code", newValue: "relay/channel/baidu/adaptor.go:*: unreachable code", expectedErr: "vet baseline"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := copyReleasePolicyFixture(t)
+			replaceOnce(t, filepath.Join(repo, filepath.FromSlash(test.path)), test.oldValue, test.newValue)
+
+			_, err := VerifyRepository(repo)
+
+			assert.ErrorContains(t, err, test.expectedErr)
+		})
+	}
+}
+
+func TestForkPullRequestCIContainsNoPublishSupplyChainGates(t *testing.T) {
+	repo := copyReleasePolicyFixture(t)
+	workflow, err := os.ReadFile(filepath.Join(repo, ".github/workflows/growthos-new-api-pr.yml"))
+	require.NoError(t, err)
+	content := string(workflow)
+
+	assert.Contains(t, content, "zricethezav/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9")
+	assert.Contains(t, content, "output-file: ${{ runner.temp }}/new-api-image.spdx.json")
+	assert.Contains(t, content, "/api/corresponding-source/v1")
+	assert.Contains(t, content, "licenses/license-review.json")
+	assert.Contains(t, content, "go test ./internal/releaseprovenance ./internal/releasepolicy ./internal/licenseinventory ./cmd/release-provenance ./cmd/release-license")
+	assert.Contains(t, content, "--gitleaks-ignore-path .gitleaksignore web/default/dist")
+	assert.Contains(t, content, "--gitleaks-ignore-path .gitleaksignore web/classic/dist")
 }
 
 func TestProductionDockerfileIsPackageManagerFreeAndIdentityBound(t *testing.T) {
@@ -117,6 +167,16 @@ func TestPolicyRejectsForkPRWorkflowThatCanPush(t *testing.T) {
 	assert.ErrorContains(t, err, "must not push")
 }
 
+func TestPolicyNeverAllowsALicenseHoldInRelease(t *testing.T) {
+	repo := copyReleasePolicyFixture(t)
+	path := filepath.Join(repo, ".github/workflows/growthos-new-api-release.yml")
+	replaceOnce(t, path, "release-license verify --repo .", "release-license verify --repo . --allow-hold")
+
+	_, err := VerifyRepository(repo)
+
+	assert.ErrorContains(t, err, "license HOLD")
+}
+
 func copyReleasePolicyFixture(t *testing.T) string {
 	t.Helper()
 	sourceRoot := filepath.Clean(filepath.Join("..", ".."))
@@ -124,12 +184,18 @@ func copyReleasePolicyFixture(t *testing.T) string {
 	for _, name := range []string{
 		"Dockerfile",
 		"Dockerfile.dev",
+		"README.md",
+		"go.mod",
+		".github/PULL_REQUEST_TEMPLATE.md",
+		".gitleaksignore",
 		".github/workflows/docker-build.yml",
 		".github/workflows/docker-image-branch.yml",
 		".github/workflows/electron-build.yml",
 		".github/workflows/release.yml",
 		".github/workflows/growthos-new-api-pr.yml",
 		".github/workflows/growthos-new-api-release.yml",
+		"release/pull-request-description.md",
+		"release/go-vet-baseline.txt",
 	} {
 		source := filepath.Join(sourceRoot, filepath.FromSlash(name))
 		target := filepath.Join(targetRoot, filepath.FromSlash(name))

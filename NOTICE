@@ -56,3 +56,16 @@ and other third-party components. Electron and Chromium third-party license
 notices must remain available with desktop installers and installed apps.
 
 ==== End of Notices ====
+
+==== GrowthOS Fork Modification Notice ====
+
+The mlhjyx fork adds a closed settlement-readback capability, immutable
+corresponding-source disclosure, and exact OCI release provenance for the
+GrowthOS deployment. These modifications do not change or replace the New API
+project identity, QuantumNous attribution, upstream copyright notices, or the
+GNU Affero General Public License v3.0 terms.
+
+The runtime-linked `github.com/Calcium-Ion/go-epay` dependency is used from
+exact commit `774330a939012a2baab5776e890456d5f15d586e` under the MIT License:
+
+Copyright (c) 2026 Calcium-Ion

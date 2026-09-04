@@ -57,8 +57,17 @@ jobs:
           go-version: '1.26.1'
           cache: true
 
+      - name: Scan the exact release tree for secrets
+        run: |
+          docker run --rm --workdir /repo --volume "${GITHUB_WORKSPACE}:/repo:ro" \
+            zricethezav/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9 \
+            dir --no-banner --redact --exit-code 1 \
+            --gitleaks-ignore-path .gitleaksignore .
+
       - name: Verify pinned source
-        run: go run ./cmd/release-provenance verify-upstream --repo .
+        run: |
+          go run ./cmd/release-provenance verify-upstream --repo .
+          go run ./cmd/release-license verify --repo .
 
       - name: Generate source dependency SBOM
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2

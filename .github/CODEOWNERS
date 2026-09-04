@@ -1,7 +1,13 @@
 # Fork release and corresponding-source controls require the fork owner.
 /.github/workflows/ @mlhjyx
+/.gitleaksignore @mlhjyx
 /Dockerfile @mlhjyx
 /release/ @mlhjyx
 /internal/releasepolicy/ @mlhjyx
 /internal/releaseprovenance/ @mlhjyx
+/internal/licenseinventory/ @mlhjyx
 /cmd/release-provenance/ @mlhjyx
+/cmd/release-license/ @mlhjyx
+/THIRD-PARTY-LICENSES.md @mlhjyx
+/NOTICE @mlhjyx
+/release/go-vet-baseline.txt @mlhjyx

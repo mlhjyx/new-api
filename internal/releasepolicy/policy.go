@@ -1,6 +1,8 @@
 package releasepolicy
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -17,20 +19,33 @@ const (
 	canonicalForkRepository     = "mlhjyx/new-api"
 	canonicalForkImage          = "ghcr.io/mlhjyx/new-api"
 	exactReleaseBranch          = "production-parity/settlement-readback-v1"
+	protectedReadmeSHA256       = "c5e9ae7fde68d582f1ebfdc191944e1e130443167c1253b94d658819ca53d418"
+	protectedPRTemplateSHA256   = "50a9790f8b37ecc3328c6cc4bf1ec6d5d8c251e1b13e839e4f12bfaca5ae6afb"
+	protectedGitleaksIgnoreSHA  = "80a12ab32064df8ca0caaf685e79f5316d560a31d98c09475659b85df042bfbd"
+	protectedGoVetBaselineSHA   = "785654b4c2591a7194630adabdeebeb0260c7b7ce5a923ca4055e9e8052ecde4"
+	pinnedGitleaksImage         = "zricethezav/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9"
 )
 
 var actionReferencePattern = regexp.MustCompile(`(?m)^\s*-?\s*uses:\s*[^\s#]+@([^\s#]+)`)
 var commitReferencePattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 type Report struct {
-	ForkImageRepository      string
-	ReleaseBranch            string
-	GuardedUpstreamWorkflows int
-	PinnedActionReferences   int
-	RuntimeUser              string
-	RuntimeBase              string
-	BoundedModuleDownload    bool
-	ChecksummedModuleProxy   bool
+	ForkImageRepository          string
+	ReleaseBranch                string
+	GuardedUpstreamWorkflows     int
+	PinnedActionReferences       int
+	RuntimeUser                  string
+	RuntimeBase                  string
+	BoundedModuleDownload        bool
+	ChecksummedModuleProxy       bool
+	LicenseHoldFailClosed        bool
+	ProtectedIdentityPreserved   bool
+	PullRequestTemplatePreserved bool
+	AIAssistanceDisclosed        bool
+	SecretScanPinned             bool
+	SourceAndImageSBOMChecks     bool
+	CorrespondingSourceSmoke     bool
+	GoVetBaselineFailClosed      bool
 }
 
 func VerifyRepository(repoDir string) (Report, error) {
@@ -38,6 +53,12 @@ func VerifyRepository(repoDir string) (Report, error) {
 		ForkImageRepository: canonicalForkImage,
 		ReleaseBranch:       exactReleaseBranch,
 	}
+	if err := verifyProtectedIdentity(repoDir); err != nil {
+		return Report{}, err
+	}
+	report.ProtectedIdentityPreserved = true
+	report.PullRequestTemplatePreserved = true
+	report.AIAssistanceDisclosed = true
 	runtimeBase, runtimeUser, err := verifyProductionDockerfile(repoDir)
 	if err != nil {
 		return Report{}, err
@@ -46,6 +67,7 @@ func VerifyRepository(repoDir string) (Report, error) {
 	report.RuntimeUser = runtimeUser
 	report.BoundedModuleDownload = true
 	report.ChecksummedModuleProxy = true
+	report.LicenseHoldFailClosed = true
 	workflowDir := filepath.Join(repoDir, ".github", "workflows")
 	entries, err := os.ReadDir(workflowDir)
 	if err != nil {
@@ -93,6 +115,16 @@ func VerifyRepository(repoDir string) (Report, error) {
 	if strings.Contains(prText, "docker/login-action") {
 		return Report{}, errors.New("fork PR workflow must not authenticate to a registry")
 	}
+	if !strings.Contains(prText, "release-license verify --repo . --allow-hold") {
+		return Report{}, errors.New("fork PR workflow must surface the documented license HOLD")
+	}
+	if err := verifyForkPullRequestGates(prText); err != nil {
+		return Report{}, err
+	}
+	report.SecretScanPinned = true
+	report.SourceAndImageSBOMChecks = true
+	report.CorrespondingSourceSmoke = true
+	report.GoVetBaselineFailClosed = true
 
 	releaseWorkflow, err := os.ReadFile(filepath.Join(workflowDir, "growthos-new-api-release.yml"))
 	if err != nil {
@@ -121,7 +153,110 @@ func VerifyRepository(repoDir string) (Report, error) {
 	if !strings.Contains(releaseText, exactReleaseBranch) {
 		return Report{}, errors.New("fork release workflow must bind the exact release branch")
 	}
+	if !strings.Contains(releaseText, "release-license verify --repo .") || strings.Contains(releaseText, "release-license verify --repo . --allow-hold") {
+		return Report{}, errors.New("fork release workflow must fail closed on any license HOLD")
+	}
+	if err := verifyForkReleaseGates(releaseText); err != nil {
+		return Report{}, err
+	}
 	return report, nil
+}
+
+func verifyProtectedIdentity(repoDir string) error {
+	moduleBytes, err := os.ReadFile(filepath.Join(repoDir, "go.mod"))
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(string(moduleBytes), "module github.com/QuantumNous/new-api\n") {
+		return errors.New("protected module identity differs")
+	}
+	readmeDigest, err := sha256File(filepath.Join(repoDir, "README.md"))
+	if err != nil || readmeDigest != protectedReadmeSHA256 {
+		return errors.New("protected upstream README differs")
+	}
+	templateDigest, err := sha256File(filepath.Join(repoDir, ".github", "PULL_REQUEST_TEMPLATE.md"))
+	if err != nil || templateDigest != protectedPRTemplateSHA256 {
+		return errors.New("protected upstream pull request template differs")
+	}
+	gitleaksIgnoreDigest, err := sha256File(filepath.Join(repoDir, ".gitleaksignore"))
+	if err != nil || gitleaksIgnoreDigest != protectedGitleaksIgnoreSHA {
+		return errors.New("reviewed secret allowlist differs")
+	}
+	vetBaselineDigest, err := sha256File(filepath.Join(repoDir, "release", "go-vet-baseline.txt"))
+	if err != nil || vetBaselineDigest != protectedGoVetBaselineSHA {
+		return errors.New("reviewed Go vet baseline differs")
+	}
+	disclosure, err := os.ReadFile(filepath.Join(repoDir, "release", "pull-request-description.md"))
+	if err != nil {
+		return errors.New("AI assistance disclosure is missing")
+	}
+	disclosureText := string(disclosure)
+	for _, required := range []string{
+		"Target branch: `" + exactReleaseBranch + "`",
+		"## AI assistance disclosure",
+		"OpenAI Codex",
+		"Human review status: `NOT_YET_COMPLETED`",
+		"Publication status: `NOT_AUTHORIZED_BY_THIS_ARTIFACT`",
+	} {
+		if !strings.Contains(disclosureText, required) {
+			return errors.New("AI assistance disclosure is incomplete")
+		}
+	}
+	return nil
+}
+
+func verifyForkPullRequestGates(content string) error {
+	required := []string{
+		pinnedGitleaksImage,
+		"--workdir /repo",
+		"dir --no-banner --redact --exit-code 1",
+		"--gitleaks-ignore-path .gitleaksignore .",
+		"--gitleaks-ignore-path .gitleaksignore web/default/dist",
+		"--gitleaks-ignore-path .gitleaksignore web/classic/dist",
+		"output-file: ${{ runner.temp }}/new-api-source.spdx.json",
+		"output-file: ${{ runner.temp }}/new-api-image.spdx.json",
+		"licenses/license-review.json",
+		"licenses/license-review.md",
+		"--read-only",
+		"/api/corresponding-source/v1",
+		"go test ./internal/releaseprovenance ./internal/releasepolicy ./internal/licenseinventory ./cmd/release-provenance ./cmd/release-license",
+		"go vet ./... 2> \"${RUNNER_TEMP}/go-vet.raw.txt\"",
+		"LC_ALL=C sort -u release/go-vet-baseline.txt",
+		"diff -u \"${RUNNER_TEMP}/go-vet.expected.txt\" \"${RUNNER_TEMP}/go-vet.actual.txt\"",
+	}
+	for _, value := range required {
+		if !strings.Contains(content, value) {
+			return fmt.Errorf("fork PR workflow supply-chain gate is incomplete: missing %s", value)
+		}
+	}
+	if strings.Contains(content, "Dockerfile.dev") || strings.Contains(content, "docker-compose") || strings.Contains(content, "docker compose") {
+		return errors.New("fork PR managed checks must not use a development Docker path")
+	}
+	return nil
+}
+
+func verifyForkReleaseGates(content string) error {
+	secretIndex := strings.Index(content, pinnedGitleaksImage)
+	licenseIndex := strings.Index(content, "release-license verify --repo .")
+	loginIndex := strings.Index(content, "docker/login-action")
+	publishIndex := strings.Index(content, "Build and publish one exact image")
+	if secretIndex < 0 || licenseIndex < 0 || loginIndex < 0 || publishIndex < 0 || secretIndex > loginIndex || licenseIndex > loginIndex || loginIndex > publishIndex {
+		return errors.New("fork release must pass pinned secret and fail-closed license gates before registry publication")
+	}
+	if !strings.Contains(content, "output-file: ${{ runner.temp }}/new-api-source.spdx.json") ||
+		!strings.Contains(content, "output-file: ${{ runner.temp }}/new-api-image.spdx.json") {
+		return errors.New("fork release must generate source and final-image SBOMs")
+	}
+	return nil
+}
+
+func sha256File(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func verifyProductionDockerfile(repoDir string) (string, string, error) {

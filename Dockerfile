@@ -115,7 +115,7 @@ RUN set -eu; \
     mkdir -p /runtime/data /runtime/licenses /runtime/tmp /runtime/etc; \
     printf 'new-api:x:65532:65532:New API runtime:/data:/sbin/nologin\n' > /runtime/etc/passwd; \
     printf 'new-api:x:65532:\n' > /runtime/etc/group; \
-    cp LICENSE NOTICE THIRD-PARTY-LICENSES.md /runtime/licenses/; \
+    cp LICENSE NOTICE THIRD-PARTY-LICENSES.md release/license-review.json release/license-review.md /runtime/licenses/; \
     chown -R 65532:65532 /runtime/data /runtime/licenses /runtime/tmp /runtime/etc
 
 FROM scratch AS runtime

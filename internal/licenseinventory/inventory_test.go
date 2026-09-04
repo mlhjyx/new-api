@@ -1,6 +1,7 @@
 package licenseinventory
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResolvedRuntimeEpayModuleContainsPinnedLicenseBytes(t *testing.T) {
+	repo := filepath.Clean(filepath.Join("..", ".."))
+
+	evidence, err := VerifyRuntimeEpayModule(context.Background(), repo)
+
+	require.NoError(t, err)
+	assert.Equal(t, "v0.0.5-0.20260612155053-774330a93901", evidence.Version)
+	assert.Equal(t, "86f028deb5895d8994571a0393face710851c29bb938e9b23fe7a9828efd99a8", evidence.LicenseSHA256)
+}
 
 func TestRepositoryDirectInventoryExactlyMatchesLocksAndReviewedTable(t *testing.T) {
 	repo := filepath.Clean(filepath.Join("..", ".."))
@@ -20,6 +31,8 @@ func TestRepositoryDirectInventoryExactlyMatchesLocksAndReviewedTable(t *testing
 	assert.Equal(t, 73, report.DefaultWebDirect)
 	assert.Equal(t, 51, report.ClassicWebDirect)
 	assert.Equal(t, 3, report.ElectronDirect)
+	assert.Equal(t, "v0.0.5-0.20260612155053-774330a93901", report.RuntimeEpayVersion)
+	assert.Equal(t, "86f028deb5895d8994571a0393face710851c29bb938e9b23fe7a9828efd99a8", report.RuntimeEpayLicenseSHA256)
 	assert.Equal(t, "HOLD", report.ReviewStatus)
 	assert.Equal(t, 2, report.UnresolvedPackages)
 }
@@ -72,13 +85,19 @@ func TestLicenseAndOriginalNoticeArePreserved(t *testing.T) {
 func TestLicenseReviewIsClosedAndBindsExactUnresolvedPackages(t *testing.T) {
 	repo := copyLicenseFixture(t)
 	path := filepath.Join(repo, "release/license-review.json")
-	replaceLicenseOnce(t, path, "\n}", ",\n  \"unexpected\": true\n}")
+	replaceLicenseOnce(t, path, "  ]\n}\n", "  ],\n  \"unexpected\": true\n}\n")
 	_, err := VerifyRepository(repo, true)
 	assert.ErrorContains(t, err, "closed license review")
 
 	repo = copyLicenseFixture(t)
 	path = filepath.Join(repo, "release/license-review.json")
-	replaceLicenseOnce(t, path, "@splinetool/runtime", "@splinetool/runtime-other")
+	replaceLicenseOnce(t, path, "\"evidence_uri\": \"https://github.com/Calcium-Ion/go-epay/blob/774330a939012a2baab5776e890456d5f15d586e/LICENSE\"\n    }", "\"evidence_uri\": \"https://github.com/Calcium-Ion/go-epay/blob/774330a939012a2baab5776e890456d5f15d586e/LICENSE\",\n      \"unexpected\": true\n    }")
+	_, err = VerifyRepository(repo, true)
+	assert.ErrorContains(t, err, "closed license review")
+
+	repo = copyLicenseFixture(t)
+	path = filepath.Join(repo, "release/license-review.json")
+	replaceLicenseOnce(t, path, "\"version\": \"0.9.526\",\n      \"integrity\": \"sha512-qzn", "\"version\": \"0.9.527\",\n      \"integrity\": \"sha512-qzn")
 	_, err = VerifyRepository(repo, true)
 	assert.ErrorContains(t, err, "unresolved package")
 }
@@ -89,6 +108,7 @@ func copyLicenseFixture(t *testing.T) string {
 	targetRoot := t.TempDir()
 	for _, name := range []string{
 		"go.mod",
+		"go.sum",
 		"web/bun.lock",
 		"web/package.json",
 		"web/default/package.json",
