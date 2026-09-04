@@ -143,6 +143,48 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.26.1'
+          cache: true
+
+      - name: Generate source dependency SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: .
+          format: spdx-json
+          output-file: ${{ runner.temp }}/new-api-source.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+
+      - name: Prepare exact build inputs
+        run: |
+          REVISION=$(git rev-parse HEAD)
+          SOURCE_URI="https://github.com/mlhjyx/new-api/tree/${REVISION}"
+          SOURCE_ARCHIVE_URI="https://github.com/mlhjyx/new-api/releases/download/source-${REVISION}/new-api-${REVISION}.tar.gz"
+          go run ./cmd/release-provenance prepare-source \
+            --repo . --revision "${REVISION}" \
+            --source-uri "${SOURCE_URI}" --archive-uri "${SOURCE_ARCHIVE_URI}" \
+            --archive-output "${RUNNER_TEMP}/new-api-${REVISION}.tar.gz" \
+            --source-sbom "${RUNNER_TEMP}/new-api-source.spdx.json" \
+            --output "${RUNNER_TEMP}/new-api-source-provenance.json"
+          echo "NEW_API_VERSION=production-parity-${REVISION}" >> "${GITHUB_ENV}"
+          echo "RELEASE_REVISION=${REVISION}" >> "${GITHUB_ENV}"
+          echo "RELEASE_GIT_TREE=$(jq -r .fork.git_tree "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "PATCH_SHA256=$(jq -r .fork.patch_series_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "TREE_SHA256=$(jq -r .fork.patched_tree_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "RECIPE_SHA256=$(jq -r .build.recipe_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "MODULE_SHA256=$(jq -r .build.module_graph_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "SOURCE_URI=${SOURCE_URI}" >> "${GITHUB_ENV}"
+          echo "SOURCE_ARCHIVE_URI=${SOURCE_ARCHIVE_URI}" >> "${GITHUB_ENV}"
+          echo "SOURCE_ARCHIVE_SHA256=$(jq -r .corresponding_source.archive_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "SOURCE_SBOM_SHA256=$(jq -r .sbom.source_dependency_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "LICENSE_SHA256=$(jq -r .license.license_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "NOTICE_SHA256=$(jq -r .license.notice_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "THIRD_PARTY_SHA256=$(jq -r .license.third_party_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+
       - name: Build without publishing
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -154,9 +196,32 @@ jobs:
           tags: new-api-pr:${{ github.sha }}
           provenance: mode=max
           sbom: true
+          build-args: |
+            NEW_API_VERSION=${{ env.NEW_API_VERSION }}
+            RELEASE_REVISION=${{ env.RELEASE_REVISION }}
+            RELEASE_GIT_TREE=${{ env.RELEASE_GIT_TREE }}
+            UPSTREAM_REVISION=bde9b2f44887d34ec54799ae191d50f97914359e
+            PATCH_SERIES_SHA256=${{ env.PATCH_SHA256 }}
+            PATCHED_TREE_SHA256=${{ env.TREE_SHA256 }}
+            BUILD_RECIPE_SHA256=${{ env.RECIPE_SHA256 }}
+            MODULE_GRAPH_SHA256=${{ env.MODULE_SHA256 }}
+            CORRESPONDING_SOURCE_URI=${{ env.SOURCE_URI }}
+            CORRESPONDING_SOURCE_ARCHIVE_URI=${{ env.SOURCE_ARCHIVE_URI }}
+            CORRESPONDING_SOURCE_ARCHIVE_SHA256=${{ env.SOURCE_ARCHIVE_SHA256 }}
+            SOURCE_SBOM_SHA256=${{ env.SOURCE_SBOM_SHA256 }}
+            LICENSE_SHA256=${{ env.LICENSE_SHA256 }}
+            NOTICE_SHA256=${{ env.NOTICE_SHA256 }}
+            THIRD_PARTY_SHA256=${{ env.THIRD_PARTY_SHA256 }}
 
       - name: Inspect local container boundary
         run: |
           test "$(docker image inspect new-api-pr:${GITHUB_SHA} --format '{{.Config.User}}')" != ""
           test "$(docker image inspect new-api-pr:${GITHUB_SHA} --format '{{.Config.User}}')" != "0"
-
+          test "$(docker image inspect new-api-pr:${GITHUB_SHA} --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "${GITHUB_SHA}"
+          docker create --name new-api-pr-files new-api-pr:${GITHUB_SHA}
+          docker export new-api-pr-files | tar -tf - | grep -Fx licenses/LICENSE
+          docker export new-api-pr-files | tar -tf - | grep -Fx licenses/NOTICE
+          docker export new-api-pr-files | tar -tf - | grep -Fx licenses/THIRD-PARTY-LICENSES.md
+          docker rm new-api-pr-files
+          docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m,mode=1777 --tmpfs /data:rw,noexec,nosuid,size=64m,mode=1777 \
+            new-api-pr:${GITHUB_SHA} --version | grep -Fx "production-parity-${GITHUB_SHA}"

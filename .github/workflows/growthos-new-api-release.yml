@@ -81,11 +81,15 @@ jobs:
             --source-sbom "${RUNNER_TEMP}/new-api-source.spdx.json" \
             --output "${RUNNER_TEMP}/new-api-source-provenance.json"
           echo "PATCH_SHA256=$(jq -r .fork.patch_series_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "RELEASE_GIT_TREE=$(jq -r .fork.git_tree "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
           echo "TREE_SHA256=$(jq -r .fork.patched_tree_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
           echo "RECIPE_SHA256=$(jq -r .build.recipe_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
           echo "MODULE_SHA256=$(jq -r .build.module_graph_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
           echo "SOURCE_ARCHIVE_SHA256=$(jq -r .corresponding_source.archive_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
           echo "SOURCE_SBOM_SHA256=$(jq -r .sbom.source_dependency_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "LICENSE_SHA256=$(jq -r .license.license_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "NOTICE_SHA256=$(jq -r .license.notice_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+          echo "THIRD_PARTY_SHA256=$(jq -r .license.third_party_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
@@ -111,6 +115,7 @@ jobs:
           build-args: |
             NEW_API_VERSION=${{ env.VERSION_VALUE }}
             RELEASE_REVISION=${{ env.REVISION }}
+            RELEASE_GIT_TREE=${{ env.RELEASE_GIT_TREE }}
             UPSTREAM_REVISION=${{ env.PINNED_BASE }}
             PATCH_SERIES_SHA256=${{ env.PATCH_SHA256 }}
             PATCHED_TREE_SHA256=${{ env.TREE_SHA256 }}
@@ -120,6 +125,9 @@ jobs:
             CORRESPONDING_SOURCE_ARCHIVE_URI=${{ env.SOURCE_ARCHIVE_URI }}
             CORRESPONDING_SOURCE_ARCHIVE_SHA256=${{ env.SOURCE_ARCHIVE_SHA256 }}
             SOURCE_SBOM_SHA256=${{ env.SOURCE_SBOM_SHA256 }}
+            LICENSE_SHA256=${{ env.LICENSE_SHA256 }}
+            NOTICE_SHA256=${{ env.NOTICE_SHA256 }}
+            THIRD_PARTY_SHA256=${{ env.THIRD_PARTY_SHA256 }}
           labels: |
             org.opencontainers.image.title=new-api
             org.opencontainers.image.source=https://github.com/mlhjyx/new-api
@@ -127,6 +135,7 @@ jobs:
             org.opencontainers.image.licenses=AGPL-3.0-only
             io.growthos.new-api.upstream.source=https://github.com/QuantumNous/new-api
             io.growthos.new-api.upstream.revision=${{ env.PINNED_BASE }}
+            io.growthos.new-api.fork.git-tree=${{ env.RELEASE_GIT_TREE }}
             io.growthos.new-api.patch-series-sha256=${{ env.PATCH_SHA256 }}
             io.growthos.new-api.patched-tree-sha256=${{ env.TREE_SHA256 }}
             io.growthos.new-api.build-recipe-sha256=${{ env.RECIPE_SHA256 }}
@@ -134,6 +143,9 @@ jobs:
             io.growthos.new-api.corresponding-source.uri=${{ env.SOURCE_URI }}
             io.growthos.new-api.corresponding-source.sha256=${{ env.SOURCE_ARCHIVE_SHA256 }}
             io.growthos.new-api.source-sbom.sha256=${{ env.SOURCE_SBOM_SHA256 }}
+            io.growthos.new-api.license.sha256=${{ env.LICENSE_SHA256 }}
+            io.growthos.new-api.notice.sha256=${{ env.NOTICE_SHA256 }}
+            io.growthos.new-api.third-party-licenses.sha256=${{ env.THIRD_PARTY_SHA256 }}
 
       - name: Capture exact image identity
         run: |
@@ -208,4 +220,3 @@ jobs:
             "${RUNNER_TEMP}/new-api-image.spdx.json" \
             "${RUNNER_TEMP}/new-api-release-receipt.json" \
             '${{ steps.image-sbom-attestation.outputs.bundle-path }}'
-

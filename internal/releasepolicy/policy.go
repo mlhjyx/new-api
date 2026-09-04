@@ -27,6 +27,10 @@ type Report struct {
 	ReleaseBranch            string
 	GuardedUpstreamWorkflows int
 	PinnedActionReferences   int
+	RuntimeUser              string
+	RuntimeBase              string
+	BoundedModuleDownload    bool
+	ChecksummedModuleProxy   bool
 }
 
 func VerifyRepository(repoDir string) (Report, error) {
@@ -34,6 +38,14 @@ func VerifyRepository(repoDir string) (Report, error) {
 		ForkImageRepository: canonicalForkImage,
 		ReleaseBranch:       exactReleaseBranch,
 	}
+	runtimeBase, runtimeUser, err := verifyProductionDockerfile(repoDir)
+	if err != nil {
+		return Report{}, err
+	}
+	report.RuntimeBase = runtimeBase
+	report.RuntimeUser = runtimeUser
+	report.BoundedModuleDownload = true
+	report.ChecksummedModuleProxy = true
 	workflowDir := filepath.Join(repoDir, ".github", "workflows")
 	entries, err := os.ReadDir(workflowDir)
 	if err != nil {
@@ -110,6 +122,67 @@ func VerifyRepository(repoDir string) (Report, error) {
 		return Report{}, errors.New("fork release workflow must bind the exact release branch")
 	}
 	return report, nil
+}
+
+func verifyProductionDockerfile(repoDir string) (string, string, error) {
+	data, err := os.ReadFile(filepath.Join(repoDir, "Dockerfile"))
+	if err != nil {
+		return "", "", err
+	}
+	content := string(data)
+	if strings.Contains(content, "apt-get") || strings.Contains(content, "apk add") || !strings.Contains(content, "FROM scratch AS runtime") {
+		return "", "", errors.New("production runtime must be package-manager-free")
+	}
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "FROM ") || line == "FROM scratch AS runtime" {
+			continue
+		}
+		image := strings.Fields(line)
+		if len(image) < 2 || !strings.Contains(image[1], "@sha256:") {
+			return "", "", errors.New("all production build bases must use exact image digests")
+		}
+	}
+	if !strings.Contains(content, "CGO_ENABLED=0") || strings.Contains(content, "CGO_ENABLED=1") {
+		return "", "", errors.New("production binary must be CGO-disabled")
+	}
+	boundedDownload := "RUN --mount=type=cache,id=new-api-go-mod,target=/go/pkg/mod,sharing=locked \\\n    set -eu; \\\n    for attempt in 1 2 3"
+	if !strings.Contains(content, boundedDownload) || !strings.Contains(content, "go mod download") {
+		return "", "", errors.New("production build requires a bounded module download with a persistent checksum-verified cache")
+	}
+	if !strings.Contains(content, "ARG GO_MODULE_PROXY=https://proxy.golang.org,direct") ||
+		!strings.Contains(content, "GOPROXY=\"${GO_MODULE_PROXY}\" GOSUMDB=sum.golang.org go mod download") ||
+		!strings.Contains(content, "GOPROXY=\"${GO_MODULE_PROXY}\" GOSUMDB=sum.golang.org go build") {
+		return "", "", errors.New("production build requires a checksum-verified configurable Go module proxy")
+	}
+	if !strings.Contains(content, "COPY --from=builder2 --chown=65532:65532 /build/new-api /new-api") ||
+		!strings.Contains(content, "COPY --from=builder2 --chown=65532:65532 /runtime/data /data") ||
+		!strings.Contains(content, "COPY --from=builder2 --chown=65532:65532 /runtime/licenses /licenses") {
+		return "", "", errors.New("production artifacts and writable directories require numeric ownership")
+	}
+	if !strings.Contains(content, "USER 65532:65532") {
+		return "", "", errors.New("production runtime must use the numeric non-root user")
+	}
+	requiredLabels := []string{
+		"org.opencontainers.image.source=",
+		"org.opencontainers.image.revision=",
+		"org.opencontainers.image.licenses=",
+		"io.growthos.new-api.upstream.source=",
+		"io.growthos.new-api.fork.git-tree=",
+		"io.growthos.new-api.patch-series-sha256=",
+		"io.growthos.new-api.patched-tree-sha256=",
+		"io.growthos.new-api.build-recipe-sha256=",
+		"io.growthos.new-api.module-graph-sha256=",
+		"io.growthos.new-api.corresponding-source.uri=",
+		"io.growthos.new-api.corresponding-source.sha256=",
+		"io.growthos.new-api.source-sbom.sha256=",
+	}
+	for _, label := range requiredLabels {
+		if !strings.Contains(content, label) {
+			return "", "", fmt.Errorf("production OCI labels are incomplete: missing %s", label)
+		}
+	}
+	return "scratch", "65532:65532", nil
 }
 
 func verifyEveryJobRepositoryGuard(data []byte, repository string) error {
