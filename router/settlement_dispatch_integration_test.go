@@ -241,10 +241,11 @@ func TestSettlementDispatchRejectsUnsupportedAndAmbiguousRouterPathsWithoutRedir
 
 func TestSettlementDispatchRejectsAdaptersOutsideCommonCASWithoutFallbackWire(t *testing.T) {
 	tests := []struct {
-		name            string
-		channelType     int
-		channelKey      string
-		channelSettings func(string) string
+		name                 string
+		channelType          int
+		channelKey           string
+		channelOtherSettings string
+		channelSettings      func(string) string
 	}{
 		{
 			name:        "xunfei websocket in DoResponse",
@@ -258,6 +259,19 @@ func TestSettlementDispatchRejectsAdaptersOutsideCommonCASWithoutFallbackWire(t 
 			channelSettings: func(proxyURL string) string {
 				return `{"proxy":"` + proxyURL + `"}`
 			},
+		},
+		{
+			name:        "unknown channel type cannot inherit OpenAI capability",
+			channelType: 999_999,
+			channelKey:  "local-unknown-channel-key",
+		},
+		{
+			name:        "unregistered advanced custom converter",
+			channelType: constant.ChannelTypeAdvancedCustom,
+			channelKey:  "local-advanced-key",
+			channelOtherSettings: `{"advanced_custom":{"advanced_routes":[{` +
+				`"incoming_path":"/v1/chat/completions","upstream_path":"/v1/messages",` +
+				`"converter":"openai_chat_completions_to_anthropic_messages"}]}}`,
 		},
 	}
 
@@ -278,7 +292,7 @@ func TestSettlementDispatchRejectsAdaptersOutsideCommonCASWithoutFallbackWire(t 
 			}))
 			defer fallback.Close()
 
-			db, engine := newSettlementDispatchIntegrationHarness(t, fmt.Sprintf("adapter-deny-%d", index), unsupportedCapture.URL, testCase.channelType, "")
+			db, engine := newSettlementDispatchIntegrationHarness(t, fmt.Sprintf("adapter-deny-%d", index), unsupportedCapture.URL, testCase.channelType, testCase.channelOtherSettings)
 			runtimeSettings := ""
 			if testCase.channelSettings != nil {
 				runtimeSettings = testCase.channelSettings(unsupportedCapture.URL)
@@ -472,6 +486,73 @@ func TestSettlementDispatchStreamUncertaintyLeavesOneWireAndNoReceipt(t *testing
 			assert.Zero(t, fallbackWires.Load())
 		})
 	}
+}
+
+func TestSettlementDispatchRejectsURLMediaBeforeTokenCountingEgress(t *testing.T) {
+	var mediaFetches atomic.Int32
+	media := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		mediaFetches.Add(1)
+		writer.Header().Set("Content-Type", "image/png")
+		_, _ = writer.Write([]byte("not-a-real-image"))
+	}))
+	defer media.Close()
+	var modelWires atomic.Int32
+	modelUpstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		modelWires.Add(1)
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer modelUpstream.Close()
+
+	_, engine := newSettlementDispatchIntegrationHarness(t, "url-media-deny", modelUpstream.URL, constant.ChannelTypeOpenAI, "")
+	originalMediaToken, originalNonStream, originalCountToken := constant.GetMediaToken, constant.GetMediaTokenNotStream, constant.CountToken
+	constant.GetMediaToken, constant.GetMediaTokenNotStream = true, true
+	constant.CountToken = true
+	t.Cleanup(func() {
+		constant.GetMediaToken, constant.GetMediaTokenNotStream = originalMediaToken, originalNonStream
+		constant.CountToken = originalCountToken
+	})
+
+	response := performSettlementDispatchRequest(
+		engine,
+		http.MethodPost,
+		"/v1/chat/completions",
+		`{"model":"gpt-4o-mini","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"`+media.URL+`/image.png"}}]}]}`,
+		settlementDispatchOpaque(220),
+		settlementDispatchOpaque(221),
+	)
+	assert.Equal(t, http.StatusServiceUnavailable, response.Code, response.Body.String())
+	assert.Contains(t, response.Body.String(), `"code":"settlement_dispatch_fence_unavailable"`)
+	assert.Zero(t, mediaFetches.Load())
+	assert.Zero(t, modelWires.Load())
+}
+
+func TestSettlementDispatchDoesNotFollowUpstreamRedirectAfterOneCAS(t *testing.T) {
+	var redirectedWires atomic.Int32
+	redirected := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		redirectedWires.Add(1)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"chatcmpl-redirected","object":"chat.completion","created":1710000000,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"must-not-run"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer redirected.Close()
+	var initialWires atomic.Int32
+	initial := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		initialWires.Add(1)
+		writer.Header().Set("Location", redirected.URL+"/second-wire")
+		writer.WriteHeader(http.StatusFound)
+	}))
+	defer initial.Close()
+
+	db, engine := newSettlementDispatchIntegrationHarness(t, "redirect-deny", initial.URL, constant.ChannelTypeOpenAI, "")
+	response := performSettlementDispatchRequest(engine, http.MethodPost, "/v1/chat/completions", `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`, settlementDispatchOpaque(222), settlementDispatchOpaque(223))
+	assert.Equal(t, http.StatusFound, response.Code)
+	assert.EqualValues(t, 1, initialWires.Load())
+	assert.Zero(t, redirectedWires.Load())
+	var dispatchCAS int64
+	require.NoError(t, db.Table("settlement_dispatch_audit").Count(&dispatchCAS).Error)
+	assert.EqualValues(t, 1, dispatchCAS)
+	var binding model.SettlementReadbackBinding
+	require.NoError(t, db.Where("dispatch_token_id = ?", 42).First(&binding).Error)
+	assert.Equal(t, model.SettlementReadbackBindingDispatchStarted, binding.State)
 }
 
 func addSettlementFallbackChannel(t *testing.T, db *gorm.DB, fallbackURL string) {
