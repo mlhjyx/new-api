@@ -792,7 +792,7 @@ func FindSettlementReadbackConsumeLog(db *gorm.DB, tokenID int, requestDigest st
 // cross-database or ClickHouse log topology cannot provide the transaction and
 // foreign-key guarantees required by settlement readback.
 func SettlementReadbackRelationalLogTopologyReady() bool {
-	if !common.LogConsumeEnabled || DB == nil || LOG_DB == nil || DB != LOG_DB {
+	if os.Getenv("LOG_SQL_DSN") != "" || !common.LogConsumeEnabled || DB == nil || LOG_DB == nil || DB != LOG_DB {
 		return false
 	}
 	mainType := common.MainDatabaseType()
