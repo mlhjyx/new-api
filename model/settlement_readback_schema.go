@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql"
 	"strings"
 
 	"gorm.io/gorm"
@@ -202,55 +203,114 @@ func settlementReadbackHasExactUniqueIndex(db *gorm.DB, table any, indexName str
 	if db == nil || len(expectedColumns) == 0 {
 		return false
 	}
-	if db.Dialector.Name() == "sqlite" {
-		statement := &gorm.Statement{DB: db}
-		if err := statement.Parse(table); err != nil || statement.Schema == nil {
-			return false
-		}
-		var indexes []struct {
-			Name   string `gorm:"column:name"`
-			Unique int    `gorm:"column:is_unique"`
-		}
-		if err := db.Raw(
-			`SELECT name, "unique" AS is_unique FROM pragma_index_list(?) WHERE name = ?`,
-			statement.Schema.Table,
-			indexName,
-		).Scan(&indexes).Error; err != nil || len(indexes) != 1 || indexes[0].Name != indexName || indexes[0].Unique != 1 {
-			return false
-		}
-		var columns []struct {
-			Name string `gorm:"column:name"`
-		}
-		if err := db.Raw(`SELECT name FROM pragma_index_info(?) ORDER BY seqno`, indexName).Scan(&columns).Error; err != nil || len(columns) != len(expectedColumns) {
-			return false
-		}
-		for index := range columns {
-			if columns[index].Name != expectedColumns[index] {
-				return false
-			}
-		}
-		return true
-	}
-
-	indexes, err := db.Migrator().GetIndexes(table)
-	if err != nil {
+	tableName, ok := settlementReadbackTableName(db, table)
+	if !ok {
 		return false
 	}
-	for _, index := range indexes {
-		if index.Name() != indexName {
-			continue
-		}
-		unique, known := index.Unique()
-		columns := index.Columns()
-		if !known || !unique || len(columns) != len(expectedColumns) {
+	switch db.Dialector.Name() {
+	case "sqlite":
+		return settlementReadbackHasExactSQLiteIndex(db, tableName, indexName, expectedColumns)
+	case "mysql":
+		return settlementReadbackHasExactMySQLIndex(db, tableName, indexName, expectedColumns)
+	case "postgres":
+		return settlementReadbackHasExactPostgreSQLIndex(db, tableName, indexName, expectedColumns)
+	default:
+		return false
+	}
+}
+
+func settlementReadbackTableName(db *gorm.DB, table any) (string, bool) {
+	statement := &gorm.Statement{DB: db}
+	if err := statement.Parse(table); err != nil || statement.Schema == nil || statement.Schema.Table == "" {
+		return "", false
+	}
+	return statement.Schema.Table, true
+}
+
+func settlementReadbackHasExactSQLiteIndex(db *gorm.DB, tableName string, indexName string, expectedColumns []string) bool {
+	var indexes []struct {
+		Name    string `gorm:"column:name"`
+		Unique  int    `gorm:"column:is_unique"`
+		Partial int    `gorm:"column:is_partial"`
+	}
+	err := db.Raw(
+		`SELECT name, "unique" AS is_unique, partial AS is_partial
+		 FROM pragma_index_list(?, 'main') WHERE name = ?`,
+		tableName, indexName,
+	).Scan(&indexes).Error
+	if err != nil || len(indexes) != 1 || indexes[0].Name != indexName || indexes[0].Unique != 1 || indexes[0].Partial != 0 {
+		return false
+	}
+	var columns []struct {
+		Name string `gorm:"column:name"`
+	}
+	if err := db.Raw(`SELECT name FROM pragma_index_info(?, 'main') ORDER BY seqno`, indexName).Scan(&columns).Error; err != nil || len(columns) != len(expectedColumns) {
+		return false
+	}
+	for position := range columns {
+		if columns[position].Name != expectedColumns[position] {
 			return false
 		}
-		for position := range columns {
-			if columns[position] != expectedColumns[position] {
-				return false
-			}
-		}
-		return true
 	}
-	return false
+	return true
+}
+
+func settlementReadbackHasExactMySQLIndex(db *gorm.DB, tableName string, indexName string, expectedColumns []string) bool {
+	var rows []struct {
+		ColumnName string        `gorm:"column:column_name"`
+		Sequence   int           `gorm:"column:sequence"`
+		NonUnique  int           `gorm:"column:non_unique"`
+		SubPart    sql.NullInt64 `gorm:"column:sub_part"`
+	}
+	err := db.Raw(`SELECT COLUMN_NAME AS column_name, SEQ_IN_INDEX AS sequence,
+		NON_UNIQUE AS non_unique, SUB_PART AS sub_part
+		FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?
+		ORDER BY SEQ_IN_INDEX`, tableName, indexName).Scan(&rows).Error
+	if err != nil || len(rows) != len(expectedColumns) {
+		return false
+	}
+	for position, row := range rows {
+		if row.Sequence != position+1 || row.NonUnique != 0 || row.SubPart.Valid || row.ColumnName != expectedColumns[position] {
+			return false
+		}
+	}
+	return true
+}
+
+func settlementReadbackHasExactPostgreSQLIndex(db *gorm.DB, tableName string, indexName string, expectedColumns []string) bool {
+	var rows []struct {
+		ColumnName    string `gorm:"column:column_name"`
+		Ordinality    int    `gorm:"column:ordinality"`
+		Attribute     int    `gorm:"column:attribute_number"`
+		Unique        bool   `gorm:"column:is_unique"`
+		Valid         bool   `gorm:"column:is_valid"`
+		Ready         bool   `gorm:"column:is_ready"`
+		WithoutFilter bool   `gorm:"column:without_filter"`
+		IndexKeyCount int    `gorm:"column:index_key_count"`
+	}
+	err := db.Raw(`SELECT a.attname AS column_name, keys.ordinality AS ordinality,
+		keys.attnum AS attribute_number, ix.indisunique AS is_unique,
+		ix.indisvalid AS is_valid, ix.indisready AS is_ready,
+		(ix.indpred IS NULL) AS without_filter,
+		COALESCE(array_length(ix.indkey::smallint[], 1), 0) AS index_key_count
+		FROM pg_catalog.pg_class t
+		JOIN pg_catalog.pg_namespace table_ns ON table_ns.oid = t.relnamespace
+		JOIN pg_catalog.pg_index ix ON ix.indrelid = t.oid
+		JOIN pg_catalog.pg_class i ON i.oid = ix.indexrelid
+		JOIN pg_catalog.pg_namespace index_ns ON index_ns.oid = i.relnamespace AND index_ns.oid = table_ns.oid
+		JOIN LATERAL unnest(ix.indkey::smallint[]) WITH ORDINALITY AS keys(attnum, ordinality) ON true
+		JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum = keys.attnum
+		WHERE table_ns.nspname = current_schema() AND t.relname = ? AND i.relname = ?
+		ORDER BY keys.ordinality`, tableName, indexName).Scan(&rows).Error
+	if err != nil || len(rows) != len(expectedColumns) {
+		return false
+	}
+	for position, row := range rows {
+		if row.Ordinality != position+1 || row.Attribute < 1 || row.IndexKeyCount != len(expectedColumns) ||
+			!row.Unique || !row.Valid || !row.Ready || !row.WithoutFilter || row.ColumnName != expectedColumns[position] {
+			return false
+		}
+	}
+	return true
 }
