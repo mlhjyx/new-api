@@ -21,6 +21,34 @@ func TestResolvedRuntimeEpayModuleContainsPinnedLicenseBytes(t *testing.T) {
 	assert.Equal(t, "86f028deb5895d8994571a0393face710851c29bb938e9b23fe7a9828efd99a8", evidence.LicenseSHA256)
 }
 
+func TestUnlicensedPeerPackagesAreRemovedByPrivateLocalAdapter(t *testing.T) {
+	repo := filepath.Clean(filepath.Join("..", ".."))
+	lock, err := os.ReadFile(filepath.Join(repo, "web", "bun.lock"))
+	require.NoError(t, err)
+	require.NotContains(t, string(lock), `"@giscus/react"`)
+	require.NotContains(t, string(lock), `"@splinetool/runtime"`)
+	require.Contains(t, string(lock), `"@lobehub/ui": "workspace:*"`)
+
+	for _, manifest := range []string{"web/default/package.json", "web/classic/package.json"} {
+		data, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(manifest)))
+		require.NoError(t, err)
+		require.Contains(t, string(data), `"@lobehub/ui": "workspace:*"`)
+	}
+
+	adapter, err := os.ReadFile(filepath.Join(repo, "web", "shared", "lobe-ui-adapter", "package.json"))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"name":"@lobehub/ui",
+		"version":"5.0.0",
+		"private":true,
+		"description":"GrowthOS private compatibility adapter for @lobehub/icons",
+		"license":"AGPL-3.0-only",
+		"type":"module",
+		"exports":{".":"./index.tsx","./icons":"./icons.tsx"},
+		"peerDependencies":{"react":"^19.0.0"}
+	}`, string(adapter))
+}
+
 func TestRepositoryDirectInventoryExactlyMatchesLocksAndReviewedTable(t *testing.T) {
 	repo := filepath.Clean(filepath.Join("..", ".."))
 
