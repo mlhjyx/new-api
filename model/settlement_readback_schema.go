@@ -133,6 +133,7 @@ type settlementReadbackForeignKeyContract struct {
 	ReferencedColumn string `gorm:"column:referenced_column"`
 	UpdateRule       string `gorm:"column:update_rule"`
 	DeleteRule       string `gorm:"column:delete_rule"`
+	SameSchema       int    `gorm:"column:same_schema"`
 }
 
 func settlementReadbackHasExactForeignKey(db *gorm.DB) bool {
@@ -145,7 +146,7 @@ func settlementReadbackHasExactForeignKey(db *gorm.DB) bool {
 	case "sqlite":
 		err = db.Raw(`SELECT "table" AS referenced_table, "from" AS source_column,
 			"to" AS referenced_column, UPPER(on_update) AS update_rule,
-			UPPER(on_delete) AS delete_rule
+			UPPER(on_delete) AS delete_rule, 1 AS same_schema
 			FROM pragma_foreign_key_list(?) WHERE "from" = ?`,
 			"logs", "settlement_binding_id").Scan(&rows).Error
 	case "mysql":
@@ -153,7 +154,8 @@ func settlementReadbackHasExactForeignKey(db *gorm.DB) bool {
 			k.COLUMN_NAME AS source_column,
 			k.REFERENCED_COLUMN_NAME AS referenced_column,
 			UPPER(r.UPDATE_RULE) AS update_rule,
-			UPPER(r.DELETE_RULE) AS delete_rule
+			UPPER(r.DELETE_RULE) AS delete_rule,
+			CASE WHEN k.REFERENCED_TABLE_SCHEMA = DATABASE() THEN 1 ELSE 0 END AS same_schema
 			FROM information_schema.KEY_COLUMN_USAGE k
 			JOIN information_schema.REFERENTIAL_CONSTRAINTS r
 			  ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
@@ -167,7 +169,8 @@ func settlementReadbackHasExactForeignKey(db *gorm.DB) bool {
 			kcu.column_name AS source_column,
 			ccu.column_name AS referenced_column,
 			UPPER(rc.update_rule) AS update_rule,
-			UPPER(rc.delete_rule) AS delete_rule
+			UPPER(rc.delete_rule) AS delete_rule,
+			CASE WHEN ccu.table_schema = current_schema() THEN 1 ELSE 0 END AS same_schema
 			FROM information_schema.referential_constraints rc
 			JOIN information_schema.key_column_usage kcu
 			  ON kcu.constraint_catalog = rc.constraint_catalog
@@ -191,7 +194,8 @@ func settlementReadbackHasExactForeignKey(db *gorm.DB) bool {
 		contract.SourceColumn == "settlement_binding_id" &&
 		contract.ReferencedColumn == "id" &&
 		contract.UpdateRule == "RESTRICT" &&
-		contract.DeleteRule == "RESTRICT"
+		contract.DeleteRule == "RESTRICT" &&
+		contract.SameSchema == 1
 }
 
 func settlementReadbackHasExactUniqueIndex(db *gorm.DB, table any, indexName string, expectedColumns []string) bool {
