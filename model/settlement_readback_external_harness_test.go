@@ -44,7 +44,11 @@ func validateSettlementReadbackExternalOwnership(db *gorm.DB, databaseType commo
 		return fmt.Errorf("settlement readback external database identity is invalid")
 	}
 	inventory, err := settlementReadbackExternalUserObjectInventory(db, databaseType)
-	if err != nil || len(inventory) != 1 || inventory[0] != "relation:"+settlementReadbackOwnershipTable {
+	expectedInventory := []string{"relation:" + settlementReadbackOwnershipTable}
+	if databaseType == common.DatabaseTypePostgreSQL {
+		expectedInventory = []string{"relation:public:" + settlementReadbackOwnershipTable, "schema:public"}
+	}
+	if err != nil || !settlementReadbackInventoryEqual(inventory, expectedInventory) {
 		return fmt.Errorf("settlement readback external database inventory is not exclusively owned")
 	}
 	var sentinels []settlementReadbackOwnershipSentinel
@@ -61,6 +65,18 @@ func validateSettlementReadbackExternalOwnership(db *gorm.DB, databaseType commo
 		return fmt.Errorf("settlement readback ownership sentinel does not match the database")
 	}
 	return nil
+}
+
+func settlementReadbackInventoryEqual(actual []string, expected []string) bool {
+	if len(actual) != len(expected) {
+		return false
+	}
+	for index := range actual {
+		if actual[index] != expected[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func settlementReadbackExternalCurrentDatabase(db *gorm.DB, databaseType common.DatabaseType) (string, error) {
@@ -99,35 +115,41 @@ func settlementReadbackExternalUserObjectInventory(db *gorm.DB, databaseType com
 	case common.DatabaseTypePostgreSQL:
 		query = `SELECT object_name FROM (
 			SELECT CASE c.relkind
-				WHEN 'i' THEN 'index:' || c.relname
-				WHEN 'I' THEN 'index:' || c.relname
-				ELSE 'relation:' || c.relname
+				WHEN 'i' THEN 'index:' || n.nspname || ':' || c.relname
+				WHEN 'I' THEN 'index:' || n.nspname || ':' || c.relname
+				ELSE 'relation:' || n.nspname || ':' || c.relname
 			END AS object_name
 			  FROM pg_catalog.pg_class c
 			  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-			 WHERE n.nspname = current_schema() AND c.relkind IN ('r','p','v','m','S','f','i','I')
+			 WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
+			   AND c.relkind IN ('r','p','v','m','S','f','i','I')
 			UNION ALL
-			SELECT 'routine:' || p.proname
+			SELECT 'routine:' || n.nspname || ':' || p.proname
 			  FROM pg_catalog.pg_proc p
 			  JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-			 WHERE n.nspname = current_schema()
+			 WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
 			UNION ALL
-			SELECT 'trigger:' || t.tgname
+			SELECT 'trigger:' || n.nspname || ':' || c.relname || ':' || t.tgname
 			  FROM pg_catalog.pg_trigger t
 			  JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
 			  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-			 WHERE n.nspname = current_schema() AND NOT t.tgisinternal
+			 WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema' AND NOT t.tgisinternal
 			UNION ALL
-			SELECT 'policy:' || p.polname
+			SELECT 'policy:' || n.nspname || ':' || c.relname || ':' || p.polname
 			  FROM pg_catalog.pg_policy p
 			  JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
 			  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-			 WHERE n.nspname = current_schema()
+			 WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
 			UNION ALL
-			SELECT 'type:' || t.typname
+			SELECT 'type:' || n.nspname || ':' || t.typname
 			  FROM pg_catalog.pg_type t
 			  JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
-			 WHERE n.nspname = current_schema() AND t.typtype IN ('d','e','r','m')
+			 WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
+			   AND t.typtype IN ('d','e','r','m')
+			UNION ALL
+			SELECT 'schema:' || n.nspname
+			  FROM pg_catalog.pg_namespace n
+			 WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
 		) owned_objects ORDER BY object_name`
 	default:
 		return nil, fmt.Errorf("unsupported settlement readback external database")

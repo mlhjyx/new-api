@@ -76,7 +76,13 @@ func runSettlementReadbackExternalOwnershipGuardTest(
 	t.Cleanup(func() { closeSettlementReadbackTestDB(t, unowned) })
 	before, err := settlementReadbackExternalUserObjectInventory(unowned, databaseType)
 	require.NoError(t, err)
-	assert.Empty(t, before, "the negative fixture must be a pre-existing empty database")
+	expectedUnownedInventory := []string{}
+	if databaseType == common.DatabaseTypePostgreSQL {
+		expectedUnownedInventory = []string{"schema:public"}
+		assert.Equal(t, expectedUnownedInventory, before, "the negative fixture must be a pre-existing empty database")
+	} else {
+		assert.Empty(t, before, "the negative fixture must be a pre-existing empty database")
+	}
 	assert.Error(t, validateSettlementReadbackExternalOwnership(unowned, databaseType, ownershipID, ack))
 	after, err := settlementReadbackExternalUserObjectInventory(unowned, databaseType)
 	require.NoError(t, err)
