@@ -149,14 +149,14 @@ func LoadSettlementReadbackPepperKeyring(path string) (*SettlementReadbackPepper
 // is issued once and only a peppered digest is stored.
 type SettlementReadbackCredential struct {
 	Id              int    `json:"id"`
-	LookupPrefix    string `json:"lookup_prefix" gorm:"type:varchar(32);uniqueIndex"`
-	SecretDigest    string `json:"-" gorm:"type:char(64)"`
-	PepperVersion   string `json:"pepper_version" gorm:"type:varchar(64)"`
-	DispatchTokenId int    `json:"dispatch_token_id" gorm:"index"`
-	Status          int    `json:"status" gorm:"index"`
-	CreatedAt       int64  `json:"created_at" gorm:"bigint"`
-	RevokedAt       int64  `json:"revoked_at" gorm:"bigint;default:0"`
-	RotationEndsAt  int64  `json:"rotation_ends_at" gorm:"bigint;default:0"`
+	LookupPrefix    string `json:"lookup_prefix" gorm:"type:varchar(32);not null;uniqueIndex"`
+	SecretDigest    string `json:"-" gorm:"type:char(64);not null"`
+	PepperVersion   string `json:"pepper_version" gorm:"type:varchar(64);not null"`
+	DispatchTokenId int    `json:"dispatch_token_id" gorm:"not null;index"`
+	Status          int    `json:"status" gorm:"not null;index"`
+	CreatedAt       int64  `json:"created_at" gorm:"bigint;not null"`
+	RevokedAt       int64  `json:"revoked_at" gorm:"bigint;not null;default:0"`
+	RotationEndsAt  int64  `json:"rotation_ends_at" gorm:"bigint;not null;default:0"`
 }
 
 // SettlementReadbackBinding is allocated before the first upstream write. It
