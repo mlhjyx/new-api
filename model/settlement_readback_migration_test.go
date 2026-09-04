@@ -118,6 +118,12 @@ func TestSettlementReadbackReadinessRejectsNonUniqueContractIndexes(t *testing.T
 		replacement string
 	}{
 		{
+			name:        "reader lookup prefix",
+			dropModel:   &SettlementReadbackCredential{},
+			indexName:   "idx_settlement_readback_credentials_lookup_prefix",
+			replacement: "CREATE INDEX idx_settlement_readback_credentials_lookup_prefix ON settlement_readback_credentials(lookup_prefix)",
+		},
+		{
 			name:        "token request digest",
 			dropModel:   &SettlementReadbackBinding{},
 			indexName:   "idx_settlement_request",
