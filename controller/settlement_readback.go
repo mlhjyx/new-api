@@ -21,6 +21,7 @@ import (
 const settlementReadbackContract = "new-api-settlement-readback/v1"
 const settlementReadbackPepperKeyringFileEnv = "SETTLEMENT_READBACK_CREDENTIAL_PEPPER_KEYRING_FILE"
 const settlementReadbackAdminBodyMaxBytes = 1024
+const settlementReadbackLogOtherMaxBytes = 16 * 1024
 
 var settlementReadbackAdminIntegerBodies = map[string]*regexp.Regexp{
 	"dispatch_token_id": regexp.MustCompile(`^\{[ \t\r\n]*"dispatch_token_id"[ \t\r\n]*:[ \t\r\n]*([1-9][0-9]{0,9})[ \t\r\n]*\}$`),
@@ -239,8 +240,76 @@ func settlementReadbackNonnegativeInteger(raw string) (int64, bool) {
 	return number, err == nil && number >= 0 && strconv.FormatInt(number, 10) == raw
 }
 
+func settlementReadbackAllowedLegacyOtherField(name string) bool {
+	switch name {
+	case "usage_semantic",
+		"cache_creation_tokens",
+		"cache_tokens",
+		"model_ratio",
+		"group_ratio",
+		"completion_ratio",
+		"cache_ratio",
+		"model_price",
+		"user_group_ratio",
+		"frt",
+		"reasoning_effort",
+		"is_model_mapped",
+		"upstream_model_name",
+		"is_system_prompt_overwritten",
+		"admin_info",
+		"request_path",
+		"request_conversion",
+		"claude",
+		"billing_source",
+		"billing_preference",
+		"subscription_id",
+		"subscription_pre_consumed",
+		"subscription_post_delta",
+		"subscription_plan_id",
+		"subscription_plan_title",
+		"subscription_total",
+		"subscription_used",
+		"subscription_remain",
+		"subscription_consumed",
+		"wallet_quota_deducted",
+		"po",
+		"stream_status",
+		"cache_creation_ratio",
+		"cache_creation_tokens_5m",
+		"cache_creation_ratio_5m",
+		"cache_creation_tokens_1h",
+		"cache_creation_ratio_1h",
+		"reject_reason",
+		"image",
+		"image_ratio",
+		"image_output",
+		"web_search",
+		"web_search_call_count",
+		"web_search_price",
+		"file_search",
+		"file_search_call_count",
+		"file_search_price",
+		"audio_input_seperate_price",
+		"audio_input_token_count",
+		"audio_input_price",
+		"image_generation_call",
+		"image_generation_call_price",
+		"cache_write_tokens",
+		"input_tokens_total",
+		"billing_mode",
+		"expr_b64",
+		"matched_tier":
+		return true
+	default:
+		return false
+	}
+}
+
 func settlementReadbackClosedReceipt(requestID string, log *model.Log) (settlementReadbackReceipt, bool) {
 	if log == nil || log.Type != model.LogTypeConsume || log.ChannelId < 1 || log.Quota < 0 || log.PromptTokens < 0 || log.CompletionTokens < 0 || len(log.ModelName) < 1 || len(log.ModelName) > 191 || !settlementReadbackModelIdentifier.MatchString(log.ModelName) {
+		return settlementReadbackReceipt{}, false
+	}
+	if len(log.Other) == 0 || len(log.Other) > settlementReadbackLogOtherMaxBytes {
 		return settlementReadbackReceipt{}, false
 	}
 	if !gjson.Valid(log.Other) {
@@ -251,14 +320,16 @@ func settlementReadbackClosedReceipt(requestID string, log *model.Log) (settleme
 		return settlementReadbackReceipt{}, false
 	}
 	values := map[string]gjson.Result{}
+	seen := map[string]struct{}{}
 	validFields := true
 	parsed.ForEach(func(key, value gjson.Result) bool {
 		name := key.String()
+		if _, duplicate := seen[name]; duplicate || !settlementReadbackAllowedLegacyOtherField(name) {
+			validFields = false
+			return false
+		}
+		seen[name] = struct{}{}
 		if name == "usage_semantic" || name == "cache_creation_tokens" || name == "cache_tokens" {
-			if _, duplicate := values[name]; duplicate {
-				validFields = false
-				return false
-			}
 			values[name] = value
 		}
 		return true

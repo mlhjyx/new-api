@@ -274,7 +274,7 @@ func TestSettlementReadbackClosedReceiptAllowsOnlyBoundedKnownLegacyTopLevelMeta
 
 func TestSettlementReadbackReceiptParsesCanonicalInt64WithoutFloatLoss(t *testing.T) {
 	base := model.Log{Type: model.LogTypeConsume, ChannelId: 1, ModelName: "model-v1", Quota: 0, PromptTokens: 1, CompletionTokens: 1}
-	base.Other = `{"usage_semantic":"openai","cache_creation_tokens":9007199254740993,"cache_tokens":9223372036854775807,"unrelated":"not-projected"}`
+	base.Other = `{"usage_semantic":"openai","cache_creation_tokens":9007199254740993,"cache_tokens":9223372036854775807}`
 	receipt, ok := settlementReadbackClosedReceipt("request", &base)
 	require.True(t, ok)
 	assert.Equal(t, int64(9_007_199_254_740_993), receipt.CacheCreationTokens)
