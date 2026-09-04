@@ -298,3 +298,31 @@ func TestSettlementReadbackLogLinkRollsBackWhenFinalStateCasLoses(t *testing.T) 
 	require.NoError(t, db.First(&stored, binding.Id).Error)
 	assert.Equal(t, SettlementReadbackBindingDispatchStarted, stored.State)
 }
+
+func TestCreateSettlementReadbackBindingIsExactAndPreDispatchIdempotent(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-prebind?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	require.NoError(t, db.AutoMigrate(&Token{}))
+	require.NoError(t, db.Create(&Token{Id: 42, UserId: 7, Key: "prebind-token", Status: common.TokenStatusEnabled}).Error)
+	requestDigest := strings.Repeat("5", 64)
+	nonceDigest := strings.Repeat("6", 64)
+	binding, replay, err := CreateOrGetSettlementReadbackBinding(db, 42, requestDigest, nonceDigest, "gateway-request")
+	require.NoError(t, err)
+	assert.False(t, replay)
+	require.NotNil(t, binding)
+	assert.Equal(t, SettlementReadbackBindingBound, binding.State)
+
+	recovered, replay, err := CreateOrGetSettlementReadbackBinding(db, 42, requestDigest, nonceDigest, "gateway-request")
+	require.NoError(t, err)
+	assert.True(t, replay)
+	assert.Equal(t, binding.Id, recovered.Id)
+	_, _, err = CreateOrGetSettlementReadbackBinding(db, 42, requestDigest, strings.Repeat("7", 64), "gateway-request")
+	assert.Error(t, err)
+	_, _, err = CreateOrGetSettlementReadbackBinding(db, 42, strings.Repeat("8", 64), nonceDigest, "gateway-request")
+	assert.Error(t, err)
+
+	require.True(t, BeginSettlementReadbackDispatch(db, binding.Id))
+	_, _, err = CreateOrGetSettlementReadbackBinding(db, 42, requestDigest, nonceDigest, "gateway-request")
+	assert.Error(t, err, "a started physical wire can only use readback")
+}
