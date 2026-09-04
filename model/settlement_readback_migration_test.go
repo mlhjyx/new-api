@@ -216,6 +216,37 @@ func TestSettlementReadbackReadinessRejectsWrongForeignKeyActions(t *testing.T) 
 	assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "cascade actions must not satisfy the retention contract")
 }
 
+func TestSettlementReadbackReadinessRejectsConfiguredSeparateLogStore(t *testing.T) {
+	db, err := openSettlementReadbackSQLite("configured-separate-log-store")
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	restoreSettlementReadbackTestTopology(t, db, common.DatabaseTypeSQLite)
+	assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+
+	t.Setenv("LOG_SQL_DSN", "local-separate-log-store")
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "an explicit LOG_SQL_DSN is never the shared transactional topology")
+}
+
+func TestSettlementReadbackReadinessRejectsUnsupportedOrDisabledLogTopology(t *testing.T) {
+	db, err := openSettlementReadbackSQLite("unsupported-or-disabled-log-store")
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	restoreSettlementReadbackTestTopology(t, db, common.DatabaseTypeSQLite)
+
+	common.LogConsumeEnabled = false
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady())
+	common.LogConsumeEnabled = true
+
+	common.SetLogDatabaseType(common.DatabaseTypeClickHouse)
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady())
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+
+	separate, err := openSettlementReadbackSQLite("actually-separate-log-store")
+	require.NoError(t, err)
+	LOG_DB = separate
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady())
+}
+
 func restoreSettlementReadbackTestTopology(t *testing.T, db *gorm.DB, databaseType common.DatabaseType) {
 	t.Helper()
 	originalDB, originalLogDB := DB, LOG_DB
