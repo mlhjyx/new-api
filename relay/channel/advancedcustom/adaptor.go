@@ -38,8 +38,17 @@ type Adaptor struct {
 	converter string
 }
 
-func (a *Adaptor) SettlementDispatchFence() channel.SettlementDispatchFence {
-	return channel.SettlementDispatchFenceCommonHTTPRequestV1
+func (a *Adaptor) SettlementDispatchFence(c *gin.Context, info *relaycommon.RelayInfo) channel.SettlementDispatchFence {
+	if c == nil || c.Request == nil || info == nil || c.Request.URL.Path != "/v1/responses" || info.ChannelType != constant.ChannelTypeAdvancedCustom || info.ApiType != constant.APITypeAdvancedCustom {
+		return ""
+	}
+	if err := a.resolve(c, info); err != nil || a.converter != relayconvert.ConverterOpenAIResponsesToOpenAIChat {
+		return ""
+	}
+	if info.IsStream {
+		return channel.SettlementDispatchFenceAdvancedResponsesViaChatStream
+	}
+	return channel.SettlementDispatchFenceAdvancedResponsesViaChat
 }
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {

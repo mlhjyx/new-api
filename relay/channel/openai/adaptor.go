@@ -41,8 +41,30 @@ type Adaptor struct {
 	ResponseFormat string
 }
 
-func (a *Adaptor) SettlementDispatchFence() channel.SettlementDispatchFence {
-	return channel.SettlementDispatchFenceCommonHTTPRequestV1
+func (a *Adaptor) SettlementDispatchFence(c *gin.Context, info *relaycommon.RelayInfo) channel.SettlementDispatchFence {
+	if c == nil || c.Request == nil || info == nil || info.ChannelType != constant.ChannelTypeOpenAI || info.ApiType != constant.APITypeOpenAI {
+		return ""
+	}
+	switch c.Request.URL.Path {
+	case "/v1/chat/completions":
+		if service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
+			if info.IsStream {
+				return channel.SettlementDispatchFenceOpenAIChatViaResponsesStream
+			}
+			return channel.SettlementDispatchFenceOpenAIChatViaResponses
+		}
+		if info.IsStream {
+			return channel.SettlementDispatchFenceOpenAIChatStream
+		}
+		return channel.SettlementDispatchFenceOpenAIChat
+	case "/v1/responses":
+		if info.IsStream {
+			return channel.SettlementDispatchFenceOpenAIResponsesStream
+		}
+		return channel.SettlementDispatchFenceOpenAIResponses
+	default:
+		return ""
+	}
 }
 
 func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {

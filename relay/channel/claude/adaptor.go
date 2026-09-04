@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -20,8 +21,14 @@ import (
 type Adaptor struct {
 }
 
-func (a *Adaptor) SettlementDispatchFence() channel.SettlementDispatchFence {
-	return channel.SettlementDispatchFenceCommonHTTPRequestV1
+func (a *Adaptor) SettlementDispatchFence(c *gin.Context, info *relaycommon.RelayInfo) channel.SettlementDispatchFence {
+	if c == nil || c.Request == nil || info == nil || c.Request.URL.Path != "/v1/messages" || info.ChannelType != constant.ChannelTypeAnthropic || info.ApiType != constant.APITypeAnthropic {
+		return ""
+	}
+	if info.IsStream {
+		return channel.SettlementDispatchFenceAnthropicMessagesStream
+	}
+	return channel.SettlementDispatchFenceAnthropicMessages
 }
 
 func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {

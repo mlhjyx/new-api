@@ -508,6 +508,17 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 
 	if bindingID := info.SettlementBindingId; bindingID > 0 {
+		if info.SettlementDispatchFence == "" {
+			return nil, errors.New("settlement dispatch fence unavailable")
+		}
+		client = &http.Client{
+			Transport: client.Transport,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+			Jar:     client.Jar,
+			Timeout: client.Timeout,
+		}
 		if !model.BeginSettlementReadbackDispatch(model.DB, bindingID) {
 			return nil, errors.New("settlement physical dispatch denied")
 		}

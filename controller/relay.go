@@ -122,6 +122,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
 	}
+	if preflightError := relay.ValidateSettlementDispatchPreflight(c, relayInfo); preflightError != nil {
+		newAPIError = preflightError
+		return
+	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken

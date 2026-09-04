@@ -146,6 +146,10 @@ type RelayInfo struct {
 	// SettlementBindingId is fixed before request parsing and never rebuilt from
 	// upstream headers or mutable route configuration.
 	SettlementBindingId int
+	// SettlementDispatchFence is recalculated after each selected channel and
+	// names the exact adapter/variant/converter profile allowed to reach the
+	// common no-redirect physical send seam.
+	SettlementDispatchFence string
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.
 	SubscriptionAmountTotal               int64
 	SubscriptionAmountUsedAfterPreConsume int64
