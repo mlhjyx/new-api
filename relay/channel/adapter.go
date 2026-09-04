@@ -31,6 +31,19 @@ type Adaptor interface {
 	ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error)
 }
 
+type SettlementDispatchFence string
+
+const SettlementDispatchFenceCommonHTTPRequestV1 SettlementDispatchFence = "common-http-request/v1"
+
+type SettlementDispatchFencedAdaptor interface {
+	SettlementDispatchFence() SettlementDispatchFence
+}
+
+func HasSettlementDispatchFence(adaptor Adaptor) bool {
+	fenced, ok := adaptor.(SettlementDispatchFencedAdaptor)
+	return ok && fenced.SettlementDispatchFence() == SettlementDispatchFenceCommonHTTPRequestV1
+}
+
 type TaskAdaptor interface {
 	Init(info *relaycommon.RelayInfo)
 

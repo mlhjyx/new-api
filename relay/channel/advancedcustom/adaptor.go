@@ -38,6 +38,10 @@ type Adaptor struct {
 	converter string
 }
 
+func (a *Adaptor) SettlementDispatchFence() channel.SettlementDispatchFence {
+	return channel.SettlementDispatchFenceCommonHTTPRequestV1
+}
+
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 	a.openaiAdaptor.Init(info)
 	a.claudeAdaptor.Init(info)

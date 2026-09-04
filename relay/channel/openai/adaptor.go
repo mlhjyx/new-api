@@ -41,6 +41,10 @@ type Adaptor struct {
 	ResponseFormat string
 }
 
+func (a *Adaptor) SettlementDispatchFence() channel.SettlementDispatchFence {
+	return channel.SettlementDispatchFenceCommonHTTPRequestV1
+}
+
 func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
 	result, err := service.ConvertRequest(c, info, types.RelayFormatOpenAI, request)
 	if err != nil {

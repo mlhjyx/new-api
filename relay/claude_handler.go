@@ -45,6 +45,9 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
+	if fenceError := requireSettlementDispatchFence(info, adaptor); fenceError != nil {
+		return fenceError
+	}
 	adaptor.Init(info)
 
 	if request.MaxTokens == nil || *request.MaxTokens == 0 {

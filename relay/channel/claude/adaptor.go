@@ -20,6 +20,10 @@ import (
 type Adaptor struct {
 }
 
+func (a *Adaptor) SettlementDispatchFence() channel.SettlementDispatchFence {
+	return channel.SettlementDispatchFenceCommonHTTPRequestV1
+}
+
 func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {
 	//TODO implement me
 	return nil, errors.New("not implemented")
