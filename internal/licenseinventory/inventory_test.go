@@ -56,21 +56,22 @@ func TestRepositoryDirectInventoryExactlyMatchesLocksAndReviewedTable(t *testing
 
 	require.NoError(t, err)
 	assert.Equal(t, 59, report.GoDirect)
-	assert.Equal(t, 73, report.DefaultWebDirect)
-	assert.Equal(t, 51, report.ClassicWebDirect)
+	assert.Equal(t, 74, report.DefaultWebDirect)
+	assert.Equal(t, 52, report.ClassicWebDirect)
 	assert.Equal(t, 3, report.ElectronDirect)
 	assert.Equal(t, "v0.0.5-0.20260612155053-774330a93901", report.RuntimeEpayVersion)
 	assert.Equal(t, "86f028deb5895d8994571a0393face710851c29bb938e9b23fe7a9828efd99a8", report.RuntimeEpayLicenseSHA256)
-	assert.Equal(t, "HOLD", report.ReviewStatus)
-	assert.Equal(t, 2, report.UnresolvedPackages)
+	assert.Equal(t, "APPROVED", report.ReviewStatus)
+	assert.Equal(t, 0, report.UnresolvedPackages)
+	assert.Regexp(t, `^[0-9a-f]{64}$`, report.AdapterSHA256)
 }
 
-func TestReleaseVerificationRejectsTheDocumentedLicenseHold(t *testing.T) {
+func TestReleaseVerificationAcceptsClosedLicenseReview(t *testing.T) {
 	repo := filepath.Clean(filepath.Join("..", ".."))
 
 	_, err := VerifyRepository(repo, false)
 
-	assert.ErrorContains(t, err, "license review remains HOLD")
+	assert.NoError(t, err)
 }
 
 func TestInventoryRejectsVersionDriftOrMissingRows(t *testing.T) {
@@ -110,10 +111,10 @@ func TestLicenseAndOriginalNoticeArePreserved(t *testing.T) {
 	assert.ErrorContains(t, err, "original NOTICE")
 }
 
-func TestLicenseReviewIsClosedAndBindsExactUnresolvedPackages(t *testing.T) {
+func TestLicenseReviewIsClosedAndBindsExactResolutions(t *testing.T) {
 	repo := copyLicenseFixture(t)
 	path := filepath.Join(repo, "release/license-review.json")
-	replaceLicenseOnce(t, path, "  ]\n}\n", "  ],\n  \"unexpected\": true\n}\n")
+	replaceLicenseOnce(t, path, "  \"unresolved\": []\n}\n", "  \"unresolved\": [],\n  \"unexpected\": true\n}\n")
 	_, err := VerifyRepository(repo, true)
 	assert.ErrorContains(t, err, "closed license review")
 
@@ -125,9 +126,15 @@ func TestLicenseReviewIsClosedAndBindsExactUnresolvedPackages(t *testing.T) {
 
 	repo = copyLicenseFixture(t)
 	path = filepath.Join(repo, "release/license-review.json")
-	replaceLicenseOnce(t, path, "\"version\": \"0.9.526\",\n      \"integrity\": \"sha512-qzn", "\"version\": \"0.9.527\",\n      \"integrity\": \"sha512-qzn")
+	replaceLicenseOnce(t, path, "\"name\": \"@splinetool/runtime\",\n      \"previous_version\": \"0.9.526\",\n      \"resolved_version\": \"NOT_PRESENT\"", "\"name\": \"@splinetool/runtime\",\n      \"previous_version\": \"0.9.526\",\n      \"resolved_version\": \"0.9.526\"")
 	_, err = VerifyRepository(repo, true)
-	assert.ErrorContains(t, err, "unresolved package")
+	assert.ErrorContains(t, err, "dependency resolution")
+
+	repo = copyLicenseFixture(t)
+	path = filepath.Join(repo, "web/shared/lobe-ui-adapter/icons.tsx")
+	replaceLicenseOnce(t, path, "viewBox='0 0 24 24'", "viewBox='0 0 25 25'")
+	_, err = VerifyRepository(repo, true)
+	assert.ErrorContains(t, err, "adapter evidence digest")
 }
 
 func copyLicenseFixture(t *testing.T) string {
@@ -147,6 +154,9 @@ func copyLicenseFixture(t *testing.T) string {
 		"NOTICE",
 		"THIRD-PARTY-LICENSES.md",
 		"release/license-review.json",
+		"web/shared/lobe-ui-adapter/package.json",
+		"web/shared/lobe-ui-adapter/index.tsx",
+		"web/shared/lobe-ui-adapter/icons.tsx",
 	} {
 		data, err := os.ReadFile(filepath.Join(sourceRoot, filepath.FromSlash(name)))
 		require.NoError(t, err, name)

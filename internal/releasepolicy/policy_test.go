@@ -32,6 +32,7 @@ func TestRepositoryWorkflowsHaveOneFailClosedForkReleasePath(t *testing.T) {
 	assert.True(t, report.SourceAndImageSBOMChecks)
 	assert.True(t, report.CorrespondingSourceSmoke)
 	assert.True(t, report.GoVetBaselineFailClosed)
+	assert.True(t, report.PrivateLobeAdapterBound)
 }
 
 func TestPolicyRejectsProtectedProjectIdentityDrift(t *testing.T) {
@@ -46,7 +47,7 @@ func TestPolicyRejectsProtectedProjectIdentityDrift(t *testing.T) {
 		{name: "upstream README", path: "README.md", oldValue: "Built with ❤️ by QuantumNous", newValue: "Built by GrowthOS", expectedErr: "README"},
 		{name: "upstream PR template", path: ".github/PULL_REQUEST_TEMPLATE.md", oldValue: "# ⚠️ 提交说明 / PR Notice", newValue: "# Fork PR", expectedErr: "pull request template"},
 		{name: "AI disclosure", path: "release/pull-request-description.md", oldValue: "OpenAI Codex", newValue: "automated tooling", expectedErr: "AI assistance"},
-		{name: "secret allowlist", path: ".gitleaksignore", oldValue: "Dockerfile:generic-api-key:149", newValue: "Dockerfile:generic-api-key:*", expectedErr: "secret allowlist"},
+		{name: "secret allowlist", path: ".gitleaksignore", oldValue: "Dockerfile:generic-api-key:153", newValue: "Dockerfile:generic-api-key:*", expectedErr: "secret allowlist"},
 		{name: "vet baseline", path: "release/go-vet-baseline.txt", oldValue: "relay/channel/baidu/adaptor.go:30:2: unreachable code", newValue: "relay/channel/baidu/adaptor.go:*: unreachable code", expectedErr: "vet baseline"},
 	}
 	for _, test := range tests {
@@ -74,6 +75,10 @@ func TestForkPullRequestCIContainsNoPublishSupplyChainGates(t *testing.T) {
 	assert.Contains(t, content, "go test ./internal/releaseprovenance ./internal/releasepolicy ./internal/licenseinventory ./cmd/release-provenance ./cmd/release-license")
 	assert.Contains(t, content, "--gitleaks-ignore-path .gitleaksignore web/default/dist")
 	assert.Contains(t, content, "--gitleaks-ignore-path .gitleaksignore web/classic/dist")
+	assert.Contains(t, content, "bun test shared/lobe-ui-adapter/adapter.test.tsx")
+	assert.Contains(t, content, "test ! -e node_modules/@giscus/react")
+	assert.Contains(t, content, "test ! -e node_modules/@splinetool/runtime")
+	assert.Contains(t, content, "grep -RFl \"growthos-lobe-flex-adapter\"")
 }
 
 func TestProductionDockerfileIsPackageManagerFreeAndIdentityBound(t *testing.T) {
@@ -88,6 +93,7 @@ func TestProductionDockerfileIsPackageManagerFreeAndIdentityBound(t *testing.T) 
 		{name: "unowned binary", oldValue: "COPY --from=builder2 --chown=65532:65532 /build/new-api /new-api", newValue: "COPY --from=builder2 /build/new-api /new-api", expectedErr: "numeric ownership"},
 		{name: "dynamic go binary", oldValue: "CGO_ENABLED=0", newValue: "CGO_ENABLED=1", expectedErr: "CGO-disabled"},
 		{name: "missing source label", oldValue: "io.growthos.new-api.corresponding-source.uri=\"${CORRESPONDING_SOURCE_URI}\"", newValue: "io.growthos.new-api.corresponding-source.missing=\"${CORRESPONDING_SOURCE_URI}\"", expectedErr: "OCI labels"},
+		{name: "missing private adapter", oldValue: "COPY web/shared/lobe-ui-adapter/package.json ./shared/lobe-ui-adapter/package.json\nRUN bun install --frozen-lockfile", newValue: "COPY web/shared/missing-adapter/package.json ./shared/lobe-ui-adapter/package.json\nRUN bun install --frozen-lockfile", expectedErr: "private Lobe UI adapter"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

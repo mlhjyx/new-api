@@ -55,6 +55,19 @@ jobs:
           cd ../classic
           VITE_REACT_APP_VERSION=pr-${GITHUB_SHA} bun run build
 
+      - name: Verify private icon adapter reachability
+        run: |
+          cd web
+          bun test shared/lobe-ui-adapter/adapter.test.tsx
+          test ! -e node_modules/@giscus/react
+          test ! -e node_modules/@splinetool/runtime
+          test -f node_modules/@lobehub/ui/package.json
+          ! grep -F '"@giscus/react"' bun.lock
+          ! grep -F '"@splinetool/runtime"' bun.lock
+          grep -RFl "growthos-lobe-flex-adapter" default/dist classic/dist
+          ! grep -RFl "@giscus/react" default/dist classic/dist
+          ! grep -RFl "@splinetool/runtime" default/dist classic/dist
+
       - name: Scan both frozen frontend bundles for secrets
         run: |
           docker run --rm --workdir /repo --volume "${GITHUB_WORKSPACE}:/repo:ro" \

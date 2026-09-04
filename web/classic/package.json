@@ -8,6 +8,7 @@
     "@douyinfe/semi-icons": "^2.63.1",
     "@douyinfe/semi-ui": "^2.69.1",
     "@lobehub/icons": "catalog:",
+    "@lobehub/ui": "workspace:*",
     "@visactor/react-vchart": "~1.8.8",
     "@visactor/vchart": "~1.8.8",
     "@visactor/vchart-semi-theme": "~1.8.8",

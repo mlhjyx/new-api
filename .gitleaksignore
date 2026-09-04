@@ -1,7 +1,7 @@
 # Reviewed source examples and non-secret protocol constants. Fingerprints are
 # intentionally line-bound: moving or changing a value forces a new review.
 common/str.go:gcp-api-key:261
-Dockerfile:generic-api-key:149
+Dockerfile:generic-api-key:153
 controller/token_test.go:generic-api-key:394
 controller/token_test.go:generic-api-key:422
 controller/token_test.go:generic-api-key:449

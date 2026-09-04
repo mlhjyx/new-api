@@ -24,8 +24,9 @@ Human review status: `NOT_YET_COMPLETED`.
 Publication status: `NOT_AUTHORIZED_BY_THIS_ARTIFACT`.
 
 The final PR must not check the upstream template's human-review boxes until a
-named human has actually performed those checks. Current license status is an
-engineering `HOLD`; this draft does not authorize an OCI or source release.
+named human has actually performed those checks. The engineering license review
+is now `APPROVED`, but this draft still does not authorize an OCI or source
+release and is not legal advice.
 The pinned Go 1.26.1 vet run also retains an exact, fail-closed baseline for 17
 pre-existing upstream findings; any addition, removal or line drift requires a
 separate review of `release/go-vet-baseline.txt`.

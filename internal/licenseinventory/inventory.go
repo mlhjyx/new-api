@@ -28,9 +28,11 @@ const (
 )
 
 var bunPackagePattern = regexp.MustCompile(`(?m)^\s{4}"([^"]+)": \["([^"]+)"[^\n]*"(sha512-[A-Za-z0-9+/=]+)"\],?$`)
+var bunWorkspacePackagePattern = regexp.MustCompile(`(?m)^\s{4}"([^"]+)": \["([^"]+@workspace:[^"]+)"\],?$`)
 
 var reviewedLicenseExpressions = map[string]struct{}{
 	"0BSD":                    {},
+	"AGPL-3.0-only":           {},
 	"Apache-2.0":              {},
 	"Apache-2.0 OR MIT":       {},
 	"BSD-2-Clause":            {},
@@ -52,6 +54,7 @@ type Report struct {
 	UnresolvedPackages       int
 	RuntimeEpayVersion       string
 	RuntimeEpayLicenseSHA256 string
+	AdapterSHA256            string
 }
 
 // RuntimeModuleEvidence is re-derived from the exact module selected by the
@@ -101,6 +104,7 @@ type licenseReviewEvidence struct {
 	GoSumSHA256          string `json:"go_sum_sha256"`
 	BunLockSHA256        string `json:"bun_lock_sha256"`
 	ElectronLockSHA256   string `json:"electron_lock_sha256"`
+	AdapterSHA256        string `json:"adapter_sha256"`
 	LicenseSHA256        string `json:"license_sha256"`
 	UpstreamNoticeSHA256 string `json:"upstream_notice_sha256"`
 }
@@ -144,6 +148,10 @@ func VerifyRepository(repoDir string, allowHold bool) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
+	adapter, err := VerifyLobeUIAdapter(repoDir)
+	if err != nil {
+		return Report{}, err
+	}
 	if review.Status == "HOLD" && !allowHold {
 		return Report{}, errors.New("license review remains HOLD")
 	}
@@ -156,6 +164,7 @@ func VerifyRepository(repoDir string, allowHold bool) (Report, error) {
 		UnresolvedPackages:       len(review.Unresolved),
 		RuntimeEpayVersion:       runtimeEpay.Version,
 		RuntimeEpayLicenseSHA256: runtimeEpay.LicenseSHA256,
+		AdapterSHA256:            adapter.ArtifactSHA256,
 	}, nil
 }
 
@@ -332,9 +341,19 @@ func parseWebPackage(path string, workspace string, locked map[string]dependency
 			if !ok || lockedItem.Name != name || lockedItem.Version == "" {
 				return nil, fmt.Errorf("web/%s direct dependency %s has no exact Bun lock entry", workspace, name)
 			}
+			if scoped.items[name] == "workspace:*" {
+				lockedItem, err = resolveLobeUIWorkspaceDependency(path, name, lockedItem)
+				if err != nil {
+					return nil, err
+				}
+			}
 			lockedItem.Area = "web/" + workspace
 			lockedItem.Scope = scoped.name
-			lockedItem.Ecosystem = "npm"
+			if scoped.items[name] == "workspace:*" {
+				lockedItem.Ecosystem = "local"
+			} else {
+				lockedItem.Ecosystem = "npm"
+			}
 			items = append(items, lockedItem)
 		}
 	}
@@ -351,6 +370,15 @@ func parseBunPackages(data []byte) map[string]dependency {
 			continue
 		}
 		packages[key] = dependency{Name: name, Version: version, Integrity: string(match[3])}
+	}
+	for _, match := range bunWorkspacePackagePattern.FindAllSubmatch(data, -1) {
+		key := string(match[1])
+		spec := string(match[2])
+		name, version := splitNPMNameVersion(spec)
+		if name == "" || version == "" {
+			continue
+		}
+		packages[key] = dependency{Name: name, Version: version}
 	}
 	return packages
 }
@@ -490,7 +518,7 @@ func loadLicenseReview(repoDir string) (licenseReview, error) {
 	if err != nil {
 		return licenseReview{}, err
 	}
-	if _, err := requireClosedLicenseObject(raw["evidence"], []string{"bun_lock_sha256", "electron_lock_sha256", "go_mod_sha256", "go_sum_sha256", "license_sha256", "upstream_notice_sha256"}); err != nil {
+	if _, err := requireClosedLicenseObject(raw["evidence"], []string{"adapter_sha256", "bun_lock_sha256", "electron_lock_sha256", "go_mod_sha256", "go_sum_sha256", "license_sha256", "upstream_notice_sha256"}); err != nil {
 		return licenseReview{}, err
 	}
 	if err := requireClosedLicenseArray(raw["dependency_resolutions"], []string{"artifact_integrity", "bundle_reachability", "decision", "ecosystem", "evidence_uri", "license_expression", "license_file_sha256", "name", "previous_version", "resolved_version"}); err != nil {
@@ -562,19 +590,20 @@ func validateLicenseReview(repoDir string, review licenseReview, bunPackages map
 	if review.Evidence.UpstreamNoticeSHA256 != upstreamNoticeSHA256 {
 		return errors.New("license review upstream NOTICE digest is invalid")
 	}
-	if err := validateDependencyResolutions(review.DependencyResolutions); err != nil {
+	adapter, err := VerifyLobeUIAdapter(repoDir)
+	if err != nil {
+		return err
+	}
+	if review.Evidence.AdapterSHA256 != adapter.ArtifactSHA256 {
+		return errors.New("license review adapter evidence digest differs")
+	}
+	if err := validateDependencyResolutions(review.DependencyResolutions, adapter.ArtifactSHA256); err != nil {
 		return err
 	}
 	if review.Status == "APPROVED" && len(review.Unresolved) != 0 {
 		return errors.New("approved license review cannot contain unresolved packages")
 	}
-	wantedUnresolved := map[string]struct{}{
-		"@giscus/react@3.1.0":         {},
-		"@splinetool/runtime@0.9.526": {},
-	}
-	if review.Status == "HOLD" && len(review.Unresolved) != len(wantedUnresolved) {
-		return errors.New("license review unresolved package set is incomplete")
-	}
+	wantedUnresolved := map[string]struct{}{}
 	for _, item := range review.Unresolved {
 		key := item.Name + "@" + item.Version
 		if _, ok := wantedUnresolved[key]; !ok {
@@ -596,11 +625,16 @@ func validateLicenseReview(repoDir string, review licenseReview, bunPackages map
 			return fmt.Errorf("unresolved package %s has incomplete review evidence", key)
 		}
 	}
+	for _, removed := range []string{"@giscus/react", "@splinetool/runtime"} {
+		if _, exists := bunPackages[removed]; exists {
+			return fmt.Errorf("removed unresolved package %s remains in the exact Bun lock", removed)
+		}
+	}
 	return nil
 }
 
-func validateDependencyResolutions(resolutions []dependencyResolution) error {
-	if len(resolutions) != 3 {
+func validateDependencyResolutions(resolutions []dependencyResolution, adapterSHA256 string) error {
+	if len(resolutions) != 4 {
 		return errors.New("license review dependency resolution set is incomplete")
 	}
 	wanted := map[string]dependencyResolution{
@@ -620,23 +654,35 @@ func validateDependencyResolutions(resolutions []dependencyResolution) error {
 			Ecosystem:          "npm",
 			Name:               "@giscus/react",
 			PreviousVersion:    "3.1.0",
-			ResolvedVersion:    "3.1.0",
+			ResolvedVersion:    "NOT_PRESENT",
 			ArtifactIntegrity:  "sha512-0TCO2TvL43+oOdyVVGHDItwxD1UMKP2ZYpT6gXmhFOqfAJtZxTzJ9hkn34iAF/b6YzyJ4Um89QIt9z/ajmAEeg==",
 			LicenseExpression:  "NOASSERTION",
-			BundleReachability: "auto-peer-build-graph; package identifier absent from frozen output literal scan",
-			Decision:           "HOLD_REPLACE_OR_ISOLATE",
+			BundleReachability: "absent-from-lock-install-and-frozen-bundles",
+			Decision:           "REMOVED_BY_PRIVATE_LOCAL_ADAPTER",
 			EvidenceURI:        "https://registry.npmjs.org/@giscus/react/3.1.0",
 		},
 		"@splinetool/runtime": {
 			Ecosystem:          "npm",
 			Name:               "@splinetool/runtime",
 			PreviousVersion:    "0.9.526",
-			ResolvedVersion:    "0.9.526",
+			ResolvedVersion:    "NOT_PRESENT",
 			ArtifactIntegrity:  "sha512-qznHbXA5aKwDbCgESAothCNm1IeEZcmNWG145p5aXj4w5uoqR1TZ9qkTHTKLTsUbHeitCwdhzmRqan1kxboLgQ==",
 			LicenseExpression:  "NOASSERTION",
-			BundleReachability: "auto-peer-build-graph; package identifier absent from frozen output literal scan",
-			Decision:           "HOLD_REPLACE_OR_ISOLATE",
+			BundleReachability: "absent-from-lock-install-and-frozen-bundles",
+			Decision:           "REMOVED_BY_PRIVATE_LOCAL_ADAPTER",
 			EvidenceURI:        "https://registry.npmjs.org/@splinetool/runtime/0.9.526",
+		},
+		"@lobehub/ui": {
+			Ecosystem:          "local",
+			Name:               "@lobehub/ui",
+			PreviousVersion:    "5.15.6",
+			ResolvedVersion:    "workspace:shared/lobe-ui-adapter@5.0.0",
+			ArtifactIntegrity:  "sha256:" + adapterSHA256,
+			LicenseExpression:  "AGPL-3.0-only",
+			LicenseFileSHA256:  approvedLicenseSHA256,
+			BundleReachability: "runtime-bundled-five-primitive-compatibility-surface",
+			Decision:           "REPLACED_WITH_PRIVATE_NON_PUBLISHABLE_ADAPTER",
+			EvidenceURI:        "https://www.gnu.org/licenses/agpl-3.0.txt",
 		},
 	}
 	for _, resolution := range resolutions {

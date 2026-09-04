@@ -81,6 +81,7 @@ Transitive build and runtime dependencies are recorded in the release SBOM and g
 | web/default | production  | npm       | `@hugeicons/react`                                        | `1.1.9`                                | MIT                           |
 | web/default | production  | npm       | `@lezer/highlight`                                        | `1.2.3`                                | MIT                           |
 | web/default | production  | npm       | `@lobehub/icons`                                          | `5.10.1`                               | MIT                           |
+| web/default | production  | local     | `@lobehub/ui`                                             | `workspace:shared/lobe-ui-adapter@5.0.0` | AGPL-3.0-only               |
 | web/default | production  | npm       | `@tanstack/react-query`                                   | `5.101.2`                              | MIT                           |
 | web/default | production  | npm       | `@tanstack/react-router`                                  | `1.170.17`                             | MIT                           |
 | web/default | production  | npm       | `@tanstack/react-table`                                   | `8.21.3`                               | MIT                           |
@@ -146,6 +147,7 @@ Transitive build and runtime dependencies are recorded in the release SBOM and g
 | web/classic | production  | npm       | `@douyinfe/semi-illustrations`                            | `2.99.3`                               | MIT                           |
 | web/classic | production  | npm       | `@douyinfe/semi-ui`                                       | `2.99.3`                               | MIT                           |
 | web/classic | production  | npm       | `@lobehub/icons`                                          | `5.10.1`                               | MIT                           |
+| web/classic | production  | local     | `@lobehub/ui`                                             | `workspace:shared/lobe-ui-adapter@5.0.0` | AGPL-3.0-only               |
 | web/classic | production  | npm       | `@visactor/react-vchart`                                  | `1.8.11`                               | MIT                           |
 | web/classic | production  | npm       | `@visactor/vchart`                                        | `1.8.11`                               | MIT                           |
 | web/classic | production  | npm       | `@visactor/vchart-semi-theme`                             | `1.8.8`                                | MIT                           |

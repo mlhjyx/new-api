@@ -1,11 +1,13 @@
 # New API fork license and distribution review
 
-Status: **ENGINEERING HOLD**
+Status: **ENGINEERING APPROVED**
 
 This record is engineering evidence for the planned
 `ghcr.io/mlhjyx/new-api` OCI distribution and its public corresponding source.
-It is not legal advice and does not authorize publication while the
-machine-readable review remains `HOLD`.
+It is not legal advice and does not by itself authorize publication. The
+machine-readable review is `APPROVED` only because every dependency previously
+holding this engineering gate has either been replaced by verified licensed
+bytes or removed from the frozen build graph.
 
 ## Preserved upstream terms
 
@@ -32,7 +34,7 @@ The only application-code difference from v0.0.4 is deletion of a comment;
 the payment API is unchanged. Controller, router, model and service tests must
 remain green before merge.
 
-## Unresolved automatic peer graph
+## Removed automatic peer graph
 
 `@lobehub/icons@5.10.1` imports UI primitives from its peer
 `@lobehub/ui@5.15.6`. That peer's dependency graph installs both:
@@ -44,22 +46,27 @@ remain green before merge.
 
 Their exact NPM metadata and installed package contents contain no license
 field or license file; the Spline package also omits repository and homepage
-metadata. Neither package name was found by a literal scan of either frozen
-frontend output, but that negative observation is not treated as proof of a
-license grant or complete bundle non-reachability.
+metadata. That absence was not interpreted as a license grant.
 
-`bun install --omit=peer` removes the packages, but the product then fails to
-build because the dynamically selected Lobe icon objects require
-`Center`, `Flexbox`, `Icon`, `Tag` and `ProviderIcon` from Lobe UI. Therefore the
-fork does not ship an unreviewed dependency omission or a visual-behavior
-change merely to clear this gate.
+An upgrade was rejected because both the current `@lobehub/icons@5.16.0` and
+current `@lobehub/ui@5.36.2` retain the same mandatory peer/dependency shape.
+`bun install --omit=peer` alone was also rejected: it changes the installed
+tree without removing the unresolved packages from the lock and leaves the
+icons import contract unsatisfied.
 
-The smallest acceptable remediation is a separately reviewed product adapter
-for those five UI primitives, followed by frozen default/classic builds,
-component screenshots and interaction regression tests. The alternative is an
-exact licensed Lobe UI package that no longer depends on the two unresolved
-packages. Until one of those paths is proved, the release workflow rejects the
-HOLD.
+The fork now supplies a bounded local workspace adapter for exactly `Center`,
+`Flexbox`, `Icon`, `Tag` and `ProviderIcon`. It is original fork code under
+AGPL-3.0-only, marked `private: true`, and must not be published as a LobeHub
+package. Its three product files are bound by artifact SHA-256
+`beba0d5f7daa8ae401d665603edfa67db08ea95f999ac856d619375bb012ef61`.
+
+Both frontends directly select that workspace package. The regenerated Bun
+lock contains no `@giscus/react`, `@splinetool/runtime`, or external
+`@lobehub/ui` node. Fresh frozen installs prove neither unresolved package is
+materialized, both frozen builds pass, and the resulting bundles contain the
+adapter marker but neither unresolved package identifier. The compatibility
+components have server-rendered behavior tests for layout, SVG prop forwarding,
+tag composition, and accessible provider fallback markup.
 
 ## SBOM and distribution boundary
 

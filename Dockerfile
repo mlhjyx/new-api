@@ -22,7 +22,9 @@ WORKDIR /build/web
 COPY web/package.json web/bun.lock ./
 COPY web/default/package.json ./default/package.json
 COPY web/classic/package.json ./classic/package.json
+COPY web/shared/lobe-ui-adapter/package.json ./shared/lobe-ui-adapter/package.json
 RUN bun install --frozen-lockfile
+COPY web/shared/lobe-ui-adapter ./shared/lobe-ui-adapter
 COPY ./web/default ./default
 RUN cd default && DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION="${NEW_API_VERSION}" bun run build
 
@@ -33,7 +35,9 @@ WORKDIR /build/web
 COPY web/package.json web/bun.lock ./
 COPY web/default/package.json ./default/package.json
 COPY web/classic/package.json ./classic/package.json
+COPY web/shared/lobe-ui-adapter/package.json ./shared/lobe-ui-adapter/package.json
 RUN bun install --filter ./classic --frozen-lockfile
+COPY web/shared/lobe-ui-adapter ./shared/lobe-ui-adapter
 COPY ./web/classic ./classic
 RUN cd classic && VITE_REACT_APP_VERSION="${NEW_API_VERSION}" bun run build
 

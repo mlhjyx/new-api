@@ -39,7 +39,7 @@
       "additionalProperties": false,
       "required": ["ecosystem", "name", "previous_version", "resolved_version", "artifact_integrity", "license_expression", "license_file_sha256", "bundle_reachability", "decision", "evidence_uri"],
       "properties": {
-        "ecosystem": { "enum": ["Go", "npm"] },
+        "ecosystem": { "enum": ["Go", "npm", "local"] },
         "name": { "type": "string", "minLength": 1, "maxLength": 191 },
         "previous_version": { "type": "string", "minLength": 1, "maxLength": 128 },
         "resolved_version": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -54,12 +54,13 @@
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["go_mod_sha256", "go_sum_sha256", "bun_lock_sha256", "electron_lock_sha256", "license_sha256", "upstream_notice_sha256"],
+      "required": ["go_mod_sha256", "go_sum_sha256", "bun_lock_sha256", "electron_lock_sha256", "adapter_sha256", "license_sha256", "upstream_notice_sha256"],
       "properties": {
         "go_mod_sha256": { "$ref": "#/$defs/sha256" },
         "go_sum_sha256": { "$ref": "#/$defs/sha256" },
         "bun_lock_sha256": { "$ref": "#/$defs/sha256" },
         "electron_lock_sha256": { "$ref": "#/$defs/sha256" },
+        "adapter_sha256": { "$ref": "#/$defs/sha256" },
         "license_sha256": { "$ref": "#/$defs/sha256" },
         "upstream_notice_sha256": { "$ref": "#/$defs/sha256" }
       }

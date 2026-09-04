@@ -21,7 +21,7 @@ const (
 	exactReleaseBranch          = "production-parity/settlement-readback-v1"
 	protectedReadmeSHA256       = "c5e9ae7fde68d582f1ebfdc191944e1e130443167c1253b94d658819ca53d418"
 	protectedPRTemplateSHA256   = "50a9790f8b37ecc3328c6cc4bf1ec6d5d8c251e1b13e839e4f12bfaca5ae6afb"
-	protectedGitleaksIgnoreSHA  = "80a12ab32064df8ca0caaf685e79f5316d560a31d98c09475659b85df042bfbd"
+	protectedGitleaksIgnoreSHA  = "ce9b9151dc515bc7abdfd40eb48e2d768fd222c776408cc067d4cbbc97ea0802"
 	protectedGoVetBaselineSHA   = "785654b4c2591a7194630adabdeebeb0260c7b7ce5a923ca4055e9e8052ecde4"
 	pinnedGitleaksImage         = "zricethezav/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9"
 )
@@ -46,6 +46,7 @@ type Report struct {
 	SourceAndImageSBOMChecks     bool
 	CorrespondingSourceSmoke     bool
 	GoVetBaselineFailClosed      bool
+	PrivateLobeAdapterBound      bool
 }
 
 func VerifyRepository(repoDir string) (Report, error) {
@@ -125,6 +126,7 @@ func VerifyRepository(repoDir string) (Report, error) {
 	report.SourceAndImageSBOMChecks = true
 	report.CorrespondingSourceSmoke = true
 	report.GoVetBaselineFailClosed = true
+	report.PrivateLobeAdapterBound = true
 
 	releaseWorkflow, err := os.ReadFile(filepath.Join(workflowDir, "growthos-new-api-release.yml"))
 	if err != nil {
@@ -220,6 +222,10 @@ func verifyForkPullRequestGates(content string) error {
 		"--read-only",
 		"/api/corresponding-source/v1",
 		"go test ./internal/releaseprovenance ./internal/releasepolicy ./internal/licenseinventory ./cmd/release-provenance ./cmd/release-license",
+		"bun test shared/lobe-ui-adapter/adapter.test.tsx",
+		"test ! -e node_modules/@giscus/react",
+		"test ! -e node_modules/@splinetool/runtime",
+		"grep -RFl \"growthos-lobe-flex-adapter\"",
 		"go vet ./... 2> \"${RUNNER_TEMP}/go-vet.raw.txt\"",
 		"LC_ALL=C sort -u release/go-vet-baseline.txt",
 		"diff -u \"${RUNNER_TEMP}/go-vet.expected.txt\" \"${RUNNER_TEMP}/go-vet.actual.txt\"",
@@ -280,6 +286,10 @@ func verifyProductionDockerfile(repoDir string) (string, string, error) {
 	}
 	if !strings.Contains(content, "CGO_ENABLED=0") || strings.Contains(content, "CGO_ENABLED=1") {
 		return "", "", errors.New("production binary must be CGO-disabled")
+	}
+	if strings.Count(content, "COPY web/shared/lobe-ui-adapter/package.json ./shared/lobe-ui-adapter/package.json") != 2 ||
+		strings.Count(content, "COPY web/shared/lobe-ui-adapter ./shared/lobe-ui-adapter") != 2 {
+		return "", "", errors.New("production frontend builds must bind the private Lobe UI adapter")
 	}
 	boundedDownload := "RUN --mount=type=cache,id=new-api-go-mod,target=/go/pkg/mod,sharing=locked \\\n    set -eu; \\\n    for attempt in 1 2 3"
 	if !strings.Contains(content, boundedDownload) || !strings.Contains(content, "go mod download") {
