@@ -57,6 +57,9 @@ func TestGenerateSourceProvenanceBindsCleanExactRevision(t *testing.T) {
 	assert.Equal(t, fixture.git(t, "rev-parse", revision+"^{tree}"), provenance.Fork.GitTree)
 	assert.Equal(t, sha256File(t, archivePath), provenance.CorrespondingSource.ArchiveSHA256)
 	assert.Equal(t, sha256File(t, sourceSBOM), provenance.SBOM.SourceDependencySHA256)
+	assert.Equal(t, fixture.gitObjectFileSHA(t, revision, "LICENSE"), provenance.License.LicenseSHA256)
+	assert.Equal(t, fixture.gitObjectFileSHA(t, revision, "NOTICE"), provenance.License.NoticeSHA256)
+	assert.Equal(t, fixture.gitObjectFileSHA(t, revision, "THIRD-PARTY-LICENSES.md"), provenance.License.ThirdPartySHA256)
 	assert.Regexp(t, `^[0-9a-f]{64}$`, provenance.Fork.PatchSeriesSHA256)
 	assert.Regexp(t, `^[0-9a-f]{64}$`, provenance.Fork.PatchedTreeSHA256)
 	assert.Regexp(t, `^[0-9a-f]{64}$`, provenance.Build.RecipeSHA256)
@@ -160,6 +163,10 @@ func TestClosedProvenanceAndReceiptRejectUnknownOrMissingFields(t *testing.T) {
 		_, err := DecodeReleaseReceipt([]byte(`{"schema_version":"new-api-release-receipt/v1","source":{},"oci":{},"unexpected":true}`))
 		return err
 	}())
+
+	duplicate := []byte(`{"schema_version":"new-api-upstream-base/v1","canonical_url":"https://github.com/QuantumNous/new-api","canonical_url":"https://github.com/QuantumNous/new-api","commit":"bde9b2f44887d34ec54799ae191d50f97914359e","git_tree":"8d25730d7f58a83778ef23b3a8ccd255d2d91701","tree_archive_sha256":"07923f60654b9eadda476ea4f269524273b0edeb5287b50c602c4e6921afb6d4","source_archive_sha256":"3f532d1b4f48153277342e98c54b06665b0c472118b0f032ddcc70233c288331","license_sha256":"8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef","notice_sha256":"528067fcdf4f9d7e3fdb489d02cbdd36a0efa63fc2eb1686340612c26beb9f33","third_party_sha256":"33d93b4c0522a727be82f1a0cd12b09d8b7d10ed8117529dc373f4d7e2f37aa3"}`)
+	_, err := DecodeUpstreamBase(duplicate)
+	assert.ErrorContains(t, err, "duplicate")
 }
 
 func TestFinalizeReleaseReceiptAcceptsOnlyExactForkDigestAndAttestation(t *testing.T) {
@@ -253,6 +260,8 @@ func (fixture *gitFixture) releaseCommit(t *testing.T) string {
 	t.Helper()
 	fixture.writeManifest(t)
 	fixture.write(t, "feature.go", "package feature\n")
+	fixture.write(t, "NOTICE", "test notice\n\nfork modification\n")
+	fixture.write(t, "THIRD-PARTY-LICENSES.md", "test third-party\n\nupdated fork inventory\n")
 	fixture.git(t, "add", ".")
 	fixture.git(t, "commit", "-q", "-m", "feat: release fixture")
 	return fixture.git(t, "rev-parse", "HEAD")
