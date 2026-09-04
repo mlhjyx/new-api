@@ -50,6 +50,7 @@ const (
 	ErrorCodeDoRequestFailed                    ErrorCode = "do_request_failed"
 	ErrorCodeSettlementPersistenceFailed        ErrorCode = "settlement_persistence_failed"
 	ErrorCodeSettlementDispatchFenceUnavailable ErrorCode = "settlement_dispatch_fence_unavailable"
+	ErrorCodeSettlementStreamIncomplete         ErrorCode = "settlement_stream_incomplete"
 	ErrorCodeGetChannelFailed                   ErrorCode = "get_channel_failed"
 	ErrorCodeGenRelayInfoFailed                 ErrorCode = "gen_relay_info_failed"
 

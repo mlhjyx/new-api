@@ -354,6 +354,23 @@ func SettlementReceiptPersistenceError() *types.NewAPIError {
 	)
 }
 
+func SettlementStreamCompletionError(relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	if relayInfo == nil || relayInfo.SettlementBindingId == 0 || !relayInfo.IsStream {
+		return nil
+	}
+	if relayInfo.StreamStatus != nil &&
+		(relayInfo.StreamStatus.EndReason == relaycommon.StreamEndReasonDone || relayInfo.StreamStatus.HasTerminalEventObserved()) &&
+		!relayInfo.StreamStatus.HasErrors() {
+		return nil
+	}
+	return types.NewErrorWithStatusCode(
+		fmt.Errorf("settlement stream did not reach a verified terminal event"),
+		types.ErrorCodeSettlementStreamIncomplete,
+		http.StatusInternalServerError,
+		types.ErrOptionWithSkipRetry(),
+	)
+}
+
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) *types.NewAPIError {
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)

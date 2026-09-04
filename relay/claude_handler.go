@@ -151,6 +151,9 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		if newApiErr != nil {
 			return newApiErr
 		}
+		if completionError := service.SettlementStreamCompletionError(info); completionError != nil {
+			return completionError
+		}
 
 		if persistenceError := service.PostTextConsumeQuota(c, info, usage, nil); persistenceError != nil {
 			return persistenceError
@@ -225,6 +228,9 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
+	}
+	if completionError := service.SettlementStreamCompletionError(info); completionError != nil {
+		return completionError
 	}
 
 	if persistenceError := service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil); persistenceError != nil {
