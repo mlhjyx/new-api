@@ -76,6 +76,7 @@ func TestSettlementReadbackReadinessRejectsPostgreSQLForeignKeySchemaDrift(t *te
 	}
 	db, err := gorm.Open(postgres.Open(dsn), settlementReadbackPhaseDGormConfig())
 	require.NoError(t, err)
+	requireSettlementReadbackExternalOwnership(t, db, common.DatabaseTypePostgreSQL)
 	for _, table := range []string{"logs", "settlement_readback_bindings", "settlement_readback_credentials"} {
 		if db.Migrator().HasTable(table) {
 			t.Fatalf("refusing foreign-key schema drift test against non-empty PostgreSQL database: table %s already exists", table)
@@ -186,6 +187,7 @@ func TestSettlementReadbackReadinessRejectsPostgreSQLIndexCatalogDrift(t *testin
 
 func prepareSettlementReadbackExternalDriftDB(t *testing.T, db *gorm.DB, databaseType common.DatabaseType) {
 	t.Helper()
+	requireSettlementReadbackExternalOwnership(t, db, databaseType)
 	for _, table := range []string{"logs", "settlement_readback_bindings", "settlement_readback_credentials"} {
 		if db.Migrator().HasTable(table) {
 			t.Fatalf("refusing index drift test against non-empty %s database: table %s already exists", databaseType, table)
@@ -209,6 +211,7 @@ func prepareSettlementReadbackExternalDriftDB(t *testing.T, db *gorm.DB, databas
 
 func runSettlementReadbackExternalForeignKeyDrift(t *testing.T, db *gorm.DB, databaseType common.DatabaseType) {
 	t.Helper()
+	requireSettlementReadbackExternalOwnership(t, db, databaseType)
 	for _, table := range []string{"logs", "settlement_readback_bindings", "settlement_readback_credentials"} {
 		if db.Migrator().HasTable(table) {
 			t.Fatalf("refusing foreign-key drift test against non-empty %s database: table %s already exists", databaseType, table)
@@ -249,6 +252,7 @@ func runSettlementReadbackExternalForeignKeyDrift(t *testing.T, db *gorm.DB, dat
 
 func runSettlementReadbackExternalPhaseDContract(t *testing.T, db *gorm.DB, databaseType common.DatabaseType) {
 	t.Helper()
+	requireSettlementReadbackExternalOwnership(t, db, databaseType)
 	for _, table := range []string{"logs", "settlement_readback_bindings", "settlement_readback_credentials"} {
 		if db.Migrator().HasTable(table) {
 			t.Fatalf("refusing Phase D test against non-empty %s database: table %s already exists", databaseType, table)
