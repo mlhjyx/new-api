@@ -275,6 +275,56 @@ func TestSettlementDispatchRejectsAdaptersOutsideCommonCASWithoutFallbackWire(t 
 	}
 }
 
+func TestSettlementTrailingSlashRedirectIsPreservedOnlyForUnboundTokens(t *testing.T) {
+	var physicalWires atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		physicalWires.Add(1)
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	db, engine := newSettlementDispatchIntegrationHarness(t, "trailing-slash-redirect", upstream.URL, constant.ChannelTypeOpenAI, "")
+	require.NoError(t, db.Create(&model.Token{
+		Id:             43,
+		UserId:         7,
+		Key:            "ordinarydispatch",
+		Status:         common.TokenStatusEnabled,
+		ExpiredTime:    -1,
+		RemainQuota:    1_000_000_000,
+		UnlimitedQuota: true,
+		Group:          "default",
+	}).Error)
+
+	ordinary := performSettlementDispatchRequestWithAuthorization(
+		engine,
+		http.MethodPost,
+		"/v1/chat/completions/",
+		`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`,
+		"Bearer sk-ordinarydispatch",
+		"",
+		"",
+	)
+	assert.Equal(t, http.StatusTemporaryRedirect, ordinary.Code)
+	assert.Equal(t, "/v1/chat/completions", ordinary.Header().Get("Location"))
+
+	otherRoute := performSettlementDispatchRequestWithAuthorization(
+		engine,
+		http.MethodGet,
+		"/v1/models/",
+		"",
+		"Bearer sk-ordinarydispatch",
+		"",
+		"",
+	)
+	assert.Equal(t, http.StatusMovedPermanently, otherRoute.Code)
+	assert.Equal(t, "/v1/models", otherRoute.Header().Get("Location"))
+
+	assert.Zero(t, physicalWires.Load())
+	var bindings int64
+	require.NoError(t, db.Model(&model.SettlementReadbackBinding{}).Count(&bindings).Error)
+	assert.Zero(t, bindings)
+}
+
 func newSettlementDispatchIntegrationHarness(t *testing.T, name string, upstreamURL string, channelType int, channelSettings string) (*gorm.DB, *gin.Engine) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -374,11 +424,19 @@ func newSettlementDispatchIntegrationHarness(t *testing.T, name string, upstream
 }
 
 func performSettlementDispatchRequest(engine http.Handler, method string, target string, body string, requestID string, nonce string) *httptest.ResponseRecorder {
+	return performSettlementDispatchRequestWithAuthorization(engine, method, target, body, "Bearer sk-settlementdispatch", requestID, nonce)
+}
+
+func performSettlementDispatchRequestWithAuthorization(engine http.Handler, method string, target string, body string, authorization string, requestID string, nonce string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, target, bytes.NewBufferString(body))
-	request.Header.Set("Authorization", "Bearer sk-settlementdispatch")
+	request.Header.Set("Authorization", authorization)
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set(common.SettlementReadbackRequestIdHeader, requestID)
-	request.Header.Set(common.SettlementReadbackNonceHeader, nonce)
+	if requestID != "" {
+		request.Header.Set(common.SettlementReadbackRequestIdHeader, requestID)
+	}
+	if nonce != "" {
+		request.Header.Set(common.SettlementReadbackNonceHeader, nonce)
+	}
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
 	return recorder
