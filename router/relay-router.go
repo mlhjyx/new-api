@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
@@ -13,7 +14,11 @@ import (
 )
 
 func rejectNonCanonicalRelayPath(c *gin.Context) {
-	c.AbortWithStatus(http.StatusNotFound)
+	target := strings.TrimSuffix(c.Request.URL.Path, "/")
+	if c.Request.URL.RawQuery != "" {
+		target += "?" + c.Request.URL.RawQuery
+	}
+	c.Redirect(http.StatusTemporaryRedirect, target)
 }
 
 func SetRelayRouter(router *gin.Engine) {
