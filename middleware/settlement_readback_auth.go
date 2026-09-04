@@ -15,6 +15,7 @@ const (
 	SettlementReadbackReaderIDContextKey      = "settlement_readback_reader_id"
 	SettlementReadbackDispatchTokenContextKey = "settlement_readback_dispatch_token_id"
 	settlementReadbackCredentialPepperEnv     = "SETTLEMENT_READBACK_CREDENTIAL_PEPPER"
+	settlementReadbackAuthorizationMaxBytes   = 4096
 )
 
 func settlementReadbackDeny(c *gin.Context) {
@@ -24,6 +25,10 @@ func settlementReadbackDeny(c *gin.Context) {
 func SettlementReadbackAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		authorization := c.GetHeader("Authorization")
+		if len(authorization) >= settlementReadbackAuthorizationMaxBytes {
+			settlementReadbackDeny(c)
+			return
+		}
 		if !strings.HasPrefix(authorization, "Bearer ") {
 			settlementReadbackDeny(c)
 			return

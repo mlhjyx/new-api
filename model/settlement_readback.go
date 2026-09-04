@@ -27,6 +27,7 @@ const (
 	settlementReadbackLookupBytes        = 12
 	settlementReadbackDigestHexLength    = sha256.Size * 2
 	settlementReadbackLookupPrefixLength = 16
+	settlementReadbackSecretPartLength   = 43
 )
 
 var errSettlementReadbackCredentialInvalid = errors.New("invalid settlement readback credential")
@@ -111,7 +112,11 @@ func (credential *SettlementReadbackCredential) MatchesSecret(secret string, pep
 
 func settlementReadbackCredentialParts(secret string) (string, bool) {
 	parts := strings.Split(secret, ".")
-	if len(parts) != 3 || parts[0] != settlementReadbackCredentialPrefix || len(parts[1]) != settlementReadbackLookupPrefixLength || parts[1] == "" || parts[2] == "" {
+	if len(parts) != 3 || parts[0] != settlementReadbackCredentialPrefix || len(parts[1]) != settlementReadbackLookupPrefixLength || parts[1] == "" || len(parts[2]) != settlementReadbackSecretPartLength {
+		return "", false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || len(decoded) != settlementReadbackSecretBytes {
 		return "", false
 	}
 	return parts[1], true

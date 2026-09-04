@@ -23,3 +23,14 @@ func TestSettlementReadbackAuthRejectsNonReaderAuthorizationBeforeLookup(t *test
 		assert.Zero(t, context.GetInt(SettlementReadbackDispatchTokenContextKey), authorization)
 	}
 }
+
+func TestSettlementReadbackAuthRejectsOversizedAuthorizationBeforeLookup(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/settlement-readback/v1/capability", nil)
+	context.Request.Header.Set("Authorization", "Bearer "+string(make([]byte, settlementReadbackAuthorizationMaxBytes)))
+	SettlementReadbackAuth()(context)
+	assert.True(t, context.IsAborted())
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+}

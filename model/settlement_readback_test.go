@@ -26,6 +26,23 @@ func TestNewSettlementReadbackCredentialStoresOnlyDerivedSecretMaterial(t *testi
 	assert.False(t, credential.MatchesSecret(secret, "wrong-pepper"))
 }
 
+func TestSettlementReadbackCredentialPartsRequireExactRawBase64URLSecret(t *testing.T) {
+
+	_, secret, err := NewSettlementReadbackCredential(42, "pepper-v1", "test-pepper")
+	require.NoError(t, err)
+	_, ok := settlementReadbackCredentialParts(secret)
+	assert.True(t, ok)
+	for _, invalid := range []string{
+		"srb1.abcdefghijklmnop.short",
+		"srb1.abcdefghijklmnop.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+		"srb1.abcdefghijklmnop.!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+		"srb1.abcdefghijklmnop.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	} {
+		_, ok := settlementReadbackCredentialParts(invalid)
+		assert.False(t, ok, invalid)
+	}
+}
+
 func TestSettlementReadbackCapabilityRequiresTransactionalRelationalLogTopology(t *testing.T) {
 	originalDB := DB
 	originalLogDB := LOG_DB
