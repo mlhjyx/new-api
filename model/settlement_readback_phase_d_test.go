@@ -125,6 +125,21 @@ func TestSettlementReadbackReadinessRejectsMySQLPrefixUniqueIndex(t *testing.T) 
 	assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "a prefix-only digest index must not satisfy the exact uniqueness contract")
 }
 
+func TestSettlementReadbackReadinessRejectsMySQLReversedIndexOrder(t *testing.T) {
+	dsn := os.Getenv("TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("UNPROVEN: set TEST_MYSQL_DSN to run the MySQL index-order drift gate")
+	}
+	db, err := gorm.Open(mysql.Open(dsn), settlementReadbackPhaseDGormConfig())
+	require.NoError(t, err)
+	prepareSettlementReadbackExternalDriftDB(t, db, common.DatabaseTypeMySQL)
+
+	require.NoError(t, db.Migrator().DropIndex(&SettlementReadbackBinding{}, "idx_settlement_request"))
+	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX idx_settlement_request
+		ON settlement_readback_bindings(settlement_request_id_sha256, dispatch_token_id)`).Error)
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "reversed key order must not satisfy the exact uniqueness contract")
+}
+
 func TestSettlementReadbackReadinessRejectsPostgreSQLIndexCatalogDrift(t *testing.T) {
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
 	if dsn == "" {
@@ -157,6 +172,14 @@ func TestSettlementReadbackReadinessRejectsPostgreSQLIndexCatalogDrift(t *testin
 				require.NoError(t, db.Exec(`CREATE UNIQUE INDEX idx_settlement_request
 					ON settlement_readback_bindings(dispatch_token_id, settlement_request_id_sha256)
 					WHERE dispatch_token_id > 0`).Error)
+			},
+		},
+		{
+			name: "reversed key attnums",
+			mutate: func(t *testing.T, db *gorm.DB) {
+				require.NoError(t, db.Exec("DROP INDEX idx_settlement_request").Error)
+				require.NoError(t, db.Exec(`CREATE UNIQUE INDEX idx_settlement_request
+					ON settlement_readback_bindings(settlement_request_id_sha256, dispatch_token_id)`).Error)
 			},
 		},
 		{
