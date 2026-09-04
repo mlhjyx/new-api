@@ -64,3 +64,20 @@ func TestSettlementReadbackBindingAllowsSameDigestForDifferentDispatchTokens(t *
 	duplicate := &SettlementReadbackBinding{DispatchTokenId: 1, SettlementRequestIdSha256: requestDigest, SettlementNonceSha256: strings.Repeat("c", settlementReadbackDigestHexLength), GatewayRequestId: "gateway-3", State: SettlementReadbackBindingBound, CreatedAt: 1}
 	assert.Error(t, db.Create(duplicate).Error)
 }
+
+func TestSettlementReadbackBindingCasAndExactLinkedLog(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-link?mode=memory&cache=shared&_foreign_keys=on"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&SettlementReadbackBinding{}, &Log{}))
+	binding := &SettlementReadbackBinding{DispatchTokenId: 9, SettlementRequestIdSha256: strings.Repeat("d", settlementReadbackDigestHexLength), SettlementNonceSha256: strings.Repeat("e", settlementReadbackDigestHexLength), GatewayRequestId: "gateway", State: SettlementReadbackBindingBound, CreatedAt: 1}
+	require.NoError(t, db.Create(binding).Error)
+	assert.True(t, BeginSettlementReadbackDispatch(db, binding.Id))
+	assert.False(t, BeginSettlementReadbackDispatch(db, binding.Id))
+	log := &Log{Type: LogTypeConsume, TokenId: 9, SettlementBindingId: &binding.Id, CreatedAt: 2}
+	require.NoError(t, LinkSettlementReadbackConsumeLog(db, binding.Id, log))
+	receipt, pending, err := FindSettlementReadbackConsumeLog(db, 9, binding.SettlementRequestIdSha256, binding.SettlementNonceSha256)
+	require.NoError(t, err)
+	assert.False(t, pending)
+	require.NotNil(t, receipt)
+	assert.Equal(t, binding.Id, *receipt.SettlementBindingId)
+}

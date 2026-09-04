@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"gorm.io/gorm"
 )
 
 const (
@@ -140,6 +141,48 @@ func HasActiveSettlementReadbackCredential(dispatchTokenID int) (bool, error) {
 		Where("dispatch_token_id = ? AND status = ?", dispatchTokenID, SettlementReadbackCredentialActive).
 		Count(&count).Error
 	return count > 0, err
+}
+
+func BeginSettlementReadbackDispatch(db *gorm.DB, bindingID int) bool {
+	result := db.Model(&SettlementReadbackBinding{}).Where("id = ? AND state = ?", bindingID, SettlementReadbackBindingBound).Update("state", SettlementReadbackBindingDispatchStarted)
+	return result.Error == nil && result.RowsAffected == 1
+}
+
+func LinkSettlementReadbackConsumeLog(db *gorm.DB, bindingID int, log *Log) error {
+	if log == nil || log.Type != LogTypeConsume || log.SettlementBindingId == nil || *log.SettlementBindingId != bindingID {
+		return errSettlementReadbackCredentialInvalid
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		var binding SettlementReadbackBinding
+		if err := tx.First(&binding, bindingID).Error; err != nil {
+			return err
+		}
+		if binding.State != SettlementReadbackBindingDispatchStarted || binding.DispatchTokenId != log.TokenId {
+			return errSettlementReadbackCredentialInvalid
+		}
+		if err := tx.Create(log).Error; err != nil {
+			return err
+		}
+		return tx.Model(&SettlementReadbackBinding{}).Where("id = ? AND state = ?", bindingID, SettlementReadbackBindingDispatchStarted).Updates(map[string]interface{}{"state": SettlementReadbackBindingLogLinked, "log_linked_at": time.Now().Unix()}).Error
+	})
+}
+
+func FindSettlementReadbackConsumeLog(db *gorm.DB, tokenID int, requestDigest string, nonceDigest string) (*Log, bool, error) {
+	var binding SettlementReadbackBinding
+	if err := db.Where("dispatch_token_id = ? AND settlement_request_id_sha256 = ? AND settlement_nonce_sha256 = ?", tokenID, requestDigest, nonceDigest).First(&binding).Error; err != nil {
+		return nil, false, err
+	}
+	if binding.State == SettlementReadbackBindingDispatchStarted {
+		return nil, true, nil
+	}
+	if binding.State != SettlementReadbackBindingLogLinked {
+		return nil, false, errSettlementReadbackCredentialInvalid
+	}
+	var log Log
+	if err := db.Where("settlement_binding_id = ? AND token_id = ? AND type = ?", binding.Id, tokenID, LogTypeConsume).First(&log).Error; err != nil {
+		return nil, false, err
+	}
+	return &log, false, nil
 }
 
 // SettlementReadbackRelationalLogTopologyReady is intentionally strict: a
