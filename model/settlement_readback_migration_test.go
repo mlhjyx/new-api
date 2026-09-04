@@ -40,6 +40,24 @@ type legacySettlementReadbackLog struct {
 
 func (legacySettlementReadbackLog) TableName() string { return "logs" }
 
+func TestLegacySettlementReadbackFixtureCoversExactBaseLogManifest(t *testing.T) {
+	db, err := openSettlementReadbackSQLite("legacy-fixture-manifest-red")
+	require.NoError(t, err)
+	statement := &gorm.Statement{DB: db}
+	require.NoError(t, statement.Parse(&legacySettlementReadbackLog{}))
+	require.NotNil(t, statement.Schema)
+	actualColumns := make([]string, 0, len(statement.Schema.Fields))
+	for _, field := range statement.Schema.Fields {
+		actualColumns = append(actualColumns, field.DBName)
+	}
+	assert.Equal(t, []string{
+		"id", "user_id", "created_at", "type", "content", "username", "token_name",
+		"model_name", "quota", "prompt_tokens", "completion_tokens", "use_time",
+		"is_stream", "channel_id", "channel_name", "token_id", "group", "ip",
+		"request_id", "upstream_request_id", "other",
+	}, actualColumns, "the legacy fixture must cover every column in bde9b2f:model/log.go")
+}
+
 func TestSettlementReadbackSQLiteEnablesForeignKeysOnEveryPooledConnection(t *testing.T) {
 	originalPath := common.SQLitePath
 	t.Cleanup(func() { common.SQLitePath = originalPath })
