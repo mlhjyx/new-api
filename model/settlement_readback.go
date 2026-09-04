@@ -213,11 +213,68 @@ func settlementReadbackSchemaReady(db *gorm.DB) bool {
 		migrator.HasTable(&SettlementReadbackBinding{}) &&
 		migrator.HasTable(&Log{}) &&
 		migrator.HasColumn(&Log{}, "SettlementBindingId") &&
-		migrator.HasIndex(&SettlementReadbackCredential{}, "idx_settlement_readback_credentials_lookup_prefix") &&
-		migrator.HasIndex(&SettlementReadbackBinding{}, "idx_settlement_request") &&
-		migrator.HasIndex(&SettlementReadbackBinding{}, "idx_settlement_nonce") &&
-		migrator.HasIndex(&Log{}, "idx_logs_settlement_binding_id") &&
+		settlementReadbackHasExactUniqueIndex(db, &SettlementReadbackCredential{}, "idx_settlement_readback_credentials_lookup_prefix", []string{"lookup_prefix"}) &&
+		settlementReadbackHasExactUniqueIndex(db, &SettlementReadbackBinding{}, "idx_settlement_request", []string{"dispatch_token_id", "settlement_request_id_sha256"}) &&
+		settlementReadbackHasExactUniqueIndex(db, &SettlementReadbackBinding{}, "idx_settlement_nonce", []string{"dispatch_token_id", "settlement_nonce_sha256"}) &&
+		settlementReadbackHasExactUniqueIndex(db, &Log{}, "idx_logs_settlement_binding_id", []string{"settlement_binding_id"}) &&
 		migrator.HasConstraint(&settlementReadbackLinkedLog{}, "SettlementBinding")
+}
+
+func settlementReadbackHasExactUniqueIndex(db *gorm.DB, table any, indexName string, expectedColumns []string) bool {
+	if db == nil || len(expectedColumns) == 0 {
+		return false
+	}
+	if db.Dialector.Name() == "sqlite" {
+		statement := &gorm.Statement{DB: db}
+		if err := statement.Parse(table); err != nil || statement.Schema == nil {
+			return false
+		}
+		var indexes []struct {
+			Name   string `gorm:"column:name"`
+			Unique int    `gorm:"column:is_unique"`
+		}
+		if err := db.Raw(
+			`SELECT name, "unique" AS is_unique FROM pragma_index_list(?) WHERE name = ?`,
+			statement.Schema.Table,
+			indexName,
+		).Scan(&indexes).Error; err != nil || len(indexes) != 1 || indexes[0].Name != indexName || indexes[0].Unique != 1 {
+			return false
+		}
+		var columns []struct {
+			Name string `gorm:"column:name"`
+		}
+		if err := db.Raw(`SELECT name FROM pragma_index_info(?) ORDER BY seqno`, indexName).Scan(&columns).Error; err != nil || len(columns) != len(expectedColumns) {
+			return false
+		}
+		for index := range columns {
+			if columns[index].Name != expectedColumns[index] {
+				return false
+			}
+		}
+		return true
+	}
+
+	indexes, err := db.Migrator().GetIndexes(table)
+	if err != nil {
+		return false
+	}
+	for _, index := range indexes {
+		if index.Name() != indexName {
+			continue
+		}
+		unique, known := index.Unique()
+		columns := index.Columns()
+		if !known || !unique || len(columns) != len(expectedColumns) {
+			return false
+		}
+		for position := range columns {
+			if columns[position] != expectedColumns[position] {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (binding *SettlementReadbackBinding) IsDispatchStarted() bool {
