@@ -20,6 +20,34 @@ func TestRepositoryWorkflowsHaveOneFailClosedForkReleasePath(t *testing.T) {
 	assert.Equal(t, "production-parity/settlement-readback-v1", report.ReleaseBranch)
 	assert.Equal(t, 4, report.GuardedUpstreamWorkflows)
 	assert.GreaterOrEqual(t, report.PinnedActionReferences, 1)
+	assert.Equal(t, "65532:65532", report.RuntimeUser)
+	assert.Equal(t, "scratch", report.RuntimeBase)
+}
+
+func TestProductionDockerfileIsPackageManagerFreeAndIdentityBound(t *testing.T) {
+	tests := []struct {
+		name        string
+		oldValue    string
+		newValue    string
+		expectedErr string
+	}{
+		{name: "root user", oldValue: "USER 65532:65532", newValue: "USER 0:0", expectedErr: "non-root"},
+		{name: "moving package install", oldValue: "FROM scratch AS runtime", newValue: "FROM debian:bookworm-slim AS runtime\nRUN apt-get update", expectedErr: "package-manager-free"},
+		{name: "unowned binary", oldValue: "COPY --from=builder2 --chown=65532:65532 /build/new-api /new-api", newValue: "COPY --from=builder2 /build/new-api /new-api", expectedErr: "numeric ownership"},
+		{name: "dynamic go binary", oldValue: "CGO_ENABLED=0", newValue: "CGO_ENABLED=1", expectedErr: "CGO-disabled"},
+		{name: "missing source label", oldValue: "io.growthos.new-api.corresponding-source.uri=${CORRESPONDING_SOURCE_URI}", newValue: "io.growthos.new-api.corresponding-source.missing=${CORRESPONDING_SOURCE_URI}", expectedErr: "OCI labels"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			copyRoot := copyReleasePolicyFixture(t)
+			path := filepath.Join(copyRoot, "Dockerfile")
+			replaceOnce(t, path, test.oldValue, test.newValue)
+
+			_, err := VerifyRepository(copyRoot)
+
+			assert.ErrorContains(t, err, test.expectedErr)
+		})
+	}
 }
 
 func TestPolicyRejectsAnUnguardedUpstreamPublishJob(t *testing.T) {
