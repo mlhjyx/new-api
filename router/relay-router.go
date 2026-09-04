@@ -11,6 +11,12 @@ import (
 )
 
 func SetRelayRouter(router *gin.Engine) {
+	// Relay paths are capability boundaries. Gin's default trailing-slash
+	// redirect runs before route middleware, so it could redirect a malformed
+	// settlement-bound request without TokenAuth evaluating its exact path.
+	router.RedirectTrailingSlash = false
+	router.RedirectFixedPath = false
+	router.RemoveExtraSlash = false
 	router.Use(middleware.CORS())
 	router.Use(middleware.DecompressRequestMiddleware())
 	router.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
