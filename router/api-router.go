@@ -19,6 +19,13 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	anonymousRequestBodyLimit := middleware.AnonymousRequestBodyLimit()
 	{
+		settlementReadbackRoute := apiRouter.Group("/settlement-readback/v1")
+		settlementReadbackRoute.Use(middleware.SettlementReadbackAuth())
+		{
+			settlementReadbackRoute.GET("", controller.GetSettlementReadback)
+			settlementReadbackRoute.GET("/capability", controller.GetSettlementReadbackCapability)
+		}
+
 		apiRouter.GET("/setup", controller.GetSetup)
 		apiRouter.POST("/setup", anonymousRequestBodyLimit, controller.PostSetup)
 		apiRouter.GET("/status", controller.GetStatus)
