@@ -108,6 +108,40 @@ func (credential *SettlementReadbackCredential) MatchesSecret(secret string, pep
 	return subtle.ConstantTimeCompare([]byte(digest), []byte(credential.SecretDigest)) == 1
 }
 
+func settlementReadbackCredentialParts(secret string) (string, bool) {
+	parts := strings.Split(secret, ".")
+	if len(parts) != 3 || parts[0] != settlementReadbackCredentialPrefix || len(parts[1]) != settlementReadbackLookupPrefixLength || parts[1] == "" || parts[2] == "" {
+		return "", false
+	}
+	return parts[1], true
+}
+
+func GetActiveSettlementReadbackCredential(secret string, pepper string) (*SettlementReadbackCredential, error) {
+	lookupPrefix, ok := settlementReadbackCredentialParts(secret)
+	if !ok || strings.TrimSpace(pepper) == "" {
+		return nil, errSettlementReadbackCredentialInvalid
+	}
+	var credential SettlementReadbackCredential
+	if err := DB.Where("lookup_prefix = ? AND status = ?", lookupPrefix, SettlementReadbackCredentialActive).First(&credential).Error; err != nil {
+		return nil, err
+	}
+	if !credential.MatchesSecret(secret, pepper) {
+		return nil, errSettlementReadbackCredentialInvalid
+	}
+	return &credential, nil
+}
+
+func HasActiveSettlementReadbackCredential(dispatchTokenID int) (bool, error) {
+	if dispatchTokenID < 1 {
+		return false, errSettlementReadbackCredentialInvalid
+	}
+	var count int64
+	err := DB.Model(&SettlementReadbackCredential{}).
+		Where("dispatch_token_id = ? AND status = ?", dispatchTokenID, SettlementReadbackCredentialActive).
+		Count(&count).Error
+	return count > 0, err
+}
+
 // SettlementReadbackRelationalLogTopologyReady is intentionally strict: a
 // cross-database or ClickHouse log topology cannot provide the transaction and
 // foreign-key guarantees required by settlement readback.
