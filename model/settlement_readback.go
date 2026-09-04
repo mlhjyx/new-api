@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,15 +23,87 @@ const (
 	SettlementReadbackBindingDispatchStarted = "DISPATCH_STARTED"
 	SettlementReadbackBindingLogLinked       = "LOG_LINKED"
 
-	settlementReadbackCredentialPrefix   = "srb1"
-	settlementReadbackSecretBytes        = 32
-	settlementReadbackLookupBytes        = 12
-	settlementReadbackDigestHexLength    = sha256.Size * 2
-	settlementReadbackLookupPrefixLength = 16
-	settlementReadbackSecretPartLength   = 43
+	settlementReadbackCredentialPrefix             = "srb1"
+	settlementReadbackSecretBytes                  = 32
+	settlementReadbackLookupBytes                  = 12
+	settlementReadbackDigestHexLength              = sha256.Size * 2
+	settlementReadbackLookupPrefixLength           = 16
+	settlementReadbackSecretPartLength             = 43
+	settlementReadbackMaximumPepperKeys            = 3
+	settlementReadbackMaximumKeyringBytes          = 4096
+	settlementReadbackMaximumRotationSeconds int64 = 600
 )
 
 var errSettlementReadbackCredentialInvalid = errors.New("invalid settlement readback credential")
+var settlementReadbackPepperVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$`)
+
+type SettlementReadbackPepperKeyring struct {
+	activeVersion string
+	statuses      map[string]string
+	peppers       map[string]string
+}
+
+func ParseSettlementReadbackPepperKeyring(raw []byte) (*SettlementReadbackPepperKeyring, error) {
+	if len(raw) == 0 || len(raw) > settlementReadbackMaximumKeyringBytes || raw[len(raw)-1] != '\n' || strings.ContainsRune(string(raw), '\x00') {
+		return nil, errSettlementReadbackCredentialInvalid
+	}
+	lines := strings.Split(string(raw), "\n")
+	if len(lines) < 3 || lines[0] != "schema=settlement-readback-pepper-keyring/v1" || lines[len(lines)-1] != "" {
+		return nil, errSettlementReadbackCredentialInvalid
+	}
+	entries := lines[1 : len(lines)-1]
+	if len(entries) < 1 || len(entries) > settlementReadbackMaximumPepperKeys {
+		return nil, errSettlementReadbackCredentialInvalid
+	}
+	statuses := make(map[string]string, len(entries))
+	peppers := make(map[string]string, len(entries))
+	activeVersion := ""
+	for _, line := range entries {
+		parts := strings.Split(line, " ")
+		if len(parts) != 3 || !settlementReadbackPepperVersion.MatchString(parts[0]) || (parts[1] != "ACTIVE" && parts[1] != "VERIFY_ONLY") {
+			return nil, errSettlementReadbackCredentialInvalid
+		}
+		if _, exists := peppers[parts[0]]; exists || len(parts[2]) != settlementReadbackSecretPartLength {
+			return nil, errSettlementReadbackCredentialInvalid
+		}
+		decoded, err := base64.RawURLEncoding.DecodeString(parts[2])
+		if err != nil || len(decoded) != settlementReadbackSecretBytes {
+			return nil, errSettlementReadbackCredentialInvalid
+		}
+		if parts[1] == "ACTIVE" {
+			if activeVersion != "" {
+				return nil, errSettlementReadbackCredentialInvalid
+			}
+			activeVersion = parts[0]
+		}
+		statuses[parts[0]] = parts[1]
+		peppers[parts[0]] = string(decoded)
+	}
+	if activeVersion == "" {
+		return nil, errSettlementReadbackCredentialInvalid
+	}
+	return &SettlementReadbackPepperKeyring{activeVersion: activeVersion, statuses: statuses, peppers: peppers}, nil
+}
+
+func (keyring *SettlementReadbackPepperKeyring) Active() (string, string, bool) {
+	if keyring == nil || keyring.activeVersion == "" {
+		return "", "", false
+	}
+	pepper, ok := keyring.peppers[keyring.activeVersion]
+	return keyring.activeVersion, pepper, ok
+}
+
+func (keyring *SettlementReadbackPepperKeyring) Lookup(version string) (string, string, bool) {
+	if keyring == nil {
+		return "", "", false
+	}
+	status, ok := keyring.statuses[version]
+	if !ok {
+		return "", "", false
+	}
+	pepper, ok := keyring.peppers[version]
+	return status, pepper, ok
+}
 
 // SettlementReadbackCredential is deliberately separate from Token. Its secret
 // is issued once and only a peppered digest is stored.
@@ -70,6 +143,10 @@ func settlementReadbackDigest(lookupPrefix string, secretPart string, pepper str
 }
 
 func NewSettlementReadbackCredential(dispatchTokenID int, pepperVersion string, pepper string) (*SettlementReadbackCredential, string, error) {
+	return newSettlementReadbackCredential(dispatchTokenID, pepperVersion, pepper, time.Now().Unix())
+}
+
+func newSettlementReadbackCredential(dispatchTokenID int, pepperVersion string, pepper string, now int64) (*SettlementReadbackCredential, string, error) {
 	if dispatchTokenID < 1 || strings.TrimSpace(pepperVersion) == "" || strings.TrimSpace(pepper) == "" {
 		return nil, "", errSettlementReadbackCredentialInvalid
 	}
@@ -94,8 +171,122 @@ func NewSettlementReadbackCredential(dispatchTokenID int, pepperVersion string, 
 		PepperVersion:   pepperVersion,
 		DispatchTokenId: dispatchTokenID,
 		Status:          SettlementReadbackCredentialActive,
-		CreatedAt:       time.Now().Unix(),
+		CreatedAt:       now,
 	}, secret, nil
+}
+
+func SettlementReadbackCredentialUsableAt(credential *SettlementReadbackCredential, now int64) bool {
+	return credential != nil && credential.Status == SettlementReadbackCredentialActive && (credential.RotationEndsAt == 0 || now < credential.RotationEndsAt)
+}
+
+func revokeExpiredSettlementReadbackCredentials(tx *gorm.DB, dispatchTokenID int, now int64) error {
+	return tx.Model(&SettlementReadbackCredential{}).
+		Where("dispatch_token_id = ? AND status = ? AND rotation_ends_at > 0 AND rotation_ends_at <= ?", dispatchTokenID, SettlementReadbackCredentialActive, now).
+		Updates(map[string]interface{}{"status": SettlementReadbackCredentialRevoked, "revoked_at": now}).Error
+}
+
+func CreateSettlementReadbackCredential(db *gorm.DB, dispatchTokenID int, keyring *SettlementReadbackPepperKeyring, now int64) (*SettlementReadbackCredential, string, error) {
+	version, pepper, ok := keyring.Active()
+	if db == nil || dispatchTokenID < 1 || !ok || now < 1 {
+		return nil, "", errSettlementReadbackCredentialInvalid
+	}
+	var created *SettlementReadbackCredential
+	var secret string
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var token Token
+		if err := lockForUpdate(tx).Where("id = ?", dispatchTokenID).First(&token).Error; err != nil || token.Status != common.TokenStatusEnabled {
+			return errSettlementReadbackCredentialInvalid
+		}
+		if err := revokeExpiredSettlementReadbackCredentials(tx, dispatchTokenID, now); err != nil {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&SettlementReadbackCredential{}).Where("dispatch_token_id = ? AND status = ?", dispatchTokenID, SettlementReadbackCredentialActive).Count(&count).Error; err != nil {
+			return err
+		}
+		if count != 0 {
+			return errSettlementReadbackCredentialInvalid
+		}
+		credential, oneTimeSecret, err := newSettlementReadbackCredential(dispatchTokenID, version, pepper, now)
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(credential).Error; err != nil {
+			return err
+		}
+		created, secret = credential, oneTimeSecret
+		return nil
+	})
+	return created, secret, err
+}
+
+func RotateSettlementReadbackCredential(db *gorm.DB, credentialID int, overlapSeconds int64, keyring *SettlementReadbackPepperKeyring, now int64) (*SettlementReadbackCredential, string, error) {
+	version, pepper, ok := keyring.Active()
+	if db == nil || credentialID < 1 || overlapSeconds < 1 || overlapSeconds > settlementReadbackMaximumRotationSeconds || !ok || now < 1 {
+		return nil, "", errSettlementReadbackCredentialInvalid
+	}
+	var created *SettlementReadbackCredential
+	var secret string
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var current SettlementReadbackCredential
+		if err := lockForUpdate(tx).Where("id = ?", credentialID).First(&current).Error; err != nil || !SettlementReadbackCredentialUsableAt(&current, now) {
+			return errSettlementReadbackCredentialInvalid
+		}
+		var token Token
+		if err := lockForUpdate(tx).Where("id = ?", current.DispatchTokenId).First(&token).Error; err != nil || token.Status != common.TokenStatusEnabled {
+			return errSettlementReadbackCredentialInvalid
+		}
+		if err := revokeExpiredSettlementReadbackCredentials(tx, current.DispatchTokenId, now); err != nil {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&SettlementReadbackCredential{}).Where("dispatch_token_id = ? AND status = ?", current.DispatchTokenId, SettlementReadbackCredentialActive).Count(&count).Error; err != nil {
+			return err
+		}
+		if count != 1 {
+			return errSettlementReadbackCredentialInvalid
+		}
+		endsAt := now + overlapSeconds
+		if result := tx.Model(&SettlementReadbackCredential{}).Where("id = ? AND status = ?", current.Id, SettlementReadbackCredentialActive).Update("rotation_ends_at", endsAt); result.Error != nil || result.RowsAffected != 1 {
+			return errSettlementReadbackCredentialInvalid
+		}
+		credential, oneTimeSecret, err := newSettlementReadbackCredential(current.DispatchTokenId, version, pepper, now)
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(credential).Error; err != nil {
+			return err
+		}
+		created, secret = credential, oneTimeSecret
+		return nil
+	})
+	return created, secret, err
+}
+
+func RevokeSettlementReadbackCredential(db *gorm.DB, credentialID int, now int64) (bool, error) {
+	if db == nil || credentialID < 1 || now < 1 {
+		return false, errSettlementReadbackCredentialInvalid
+	}
+	replay := false
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var credential SettlementReadbackCredential
+		if err := lockForUpdate(tx).Where("id = ?", credentialID).First(&credential).Error; err != nil {
+			return err
+		}
+		if credential.Status == SettlementReadbackCredentialRevoked {
+			replay = true
+			return nil
+		}
+		if credential.Status != SettlementReadbackCredentialActive {
+			return errSettlementReadbackCredentialInvalid
+		}
+		result := tx.Model(&SettlementReadbackCredential{}).Where("id = ? AND status = ?", credentialID, SettlementReadbackCredentialActive).Updates(map[string]interface{}{"status": SettlementReadbackCredentialRevoked, "revoked_at": now})
+		if result.Error != nil || result.RowsAffected != 1 {
+			return errSettlementReadbackCredentialInvalid
+		}
+		return nil
+	})
+	return replay, err
 }
 
 func (credential *SettlementReadbackCredential) MatchesSecret(secret string, pepper string) bool {

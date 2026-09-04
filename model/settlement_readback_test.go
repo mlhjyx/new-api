@@ -136,7 +136,7 @@ func TestSettlementReadbackCredentialLifecycleEnforcesRotationAndRevocation(t *t
 	keyring, err := ParseSettlementReadbackPepperKeyring([]byte(strings.Join([]string{
 		"schema=settlement-readback-pepper-keyring/v1",
 		"pepper-v2 ACTIVE AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-		"pepper-v1 VERIFY_ONLY BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+		"pepper-v1 VERIFY_ONLY BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
 		"",
 	}, "\n")))
 	require.NoError(t, err)
@@ -153,6 +153,7 @@ func TestSettlementReadbackCredentialLifecycleEnforcesRotationAndRevocation(t *t
 	require.NoError(t, err)
 	assert.NotEmpty(t, secondSecret)
 	assert.NotEqual(t, firstSecret, secondSecret)
+	require.NoError(t, db.First(first, first.Id).Error)
 	assert.True(t, SettlementReadbackCredentialUsableAt(first, now+300))
 	assert.False(t, SettlementReadbackCredentialUsableAt(first, now+301))
 	_, _, err = RotateSettlementReadbackCredential(db, second.Id, 300, keyring, now+2)
