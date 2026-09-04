@@ -40,6 +40,7 @@ const (
 
 var errSettlementReadbackCredentialInvalid = errors.New("invalid settlement readback credential")
 var errSettlementReadbackIntegrity = errors.New("settlement readback integrity invalid")
+var errSettlementReadbackPersistence = errors.New("settlement readback persistence unavailable")
 var settlementReadbackPepperVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$`)
 var settlementReadbackGatewayRequestID = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 var settlementReadbackSha256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -166,10 +167,13 @@ type SettlementReadbackBinding struct {
 	DispatchTokenId           int    `json:"dispatch_token_id" gorm:"index;not null;uniqueIndex:idx_settlement_request,priority:1;uniqueIndex:idx_settlement_nonce,priority:1"`
 	SettlementRequestIdSha256 string `json:"-" gorm:"type:char(64);not null;uniqueIndex:idx_settlement_request,priority:2"`
 	SettlementNonceSha256     string `json:"-" gorm:"type:char(64);not null;uniqueIndex:idx_settlement_nonce,priority:2"`
-	GatewayRequestId          string `json:"-" gorm:"type:varchar(64);not null"`
-	State                     string `json:"state" gorm:"type:varchar(32);not null;index"`
-	CreatedAt                 int64  `json:"created_at" gorm:"bigint;not null"`
-	LogLinkedAt               int64  `json:"log_linked_at" gorm:"bigint;not null;default:0"`
+	// GatewayRequestId is the first observed gateway request identity. A BOUND
+	// transport replay may receive a new gateway-local request id; this field is
+	// never overwritten and is not an authorization or receipt lookup key.
+	GatewayRequestId string `json:"-" gorm:"type:varchar(64);not null"`
+	State            string `json:"state" gorm:"type:varchar(32);not null;index"`
+	CreatedAt        int64  `json:"created_at" gorm:"bigint;not null"`
+	LogLinkedAt      int64  `json:"log_linked_at" gorm:"bigint;not null;default:0"`
 }
 
 // settlementReadbackLinkedLog is migrated only when the operational log and

@@ -348,7 +348,7 @@ func TestRecordConsumeLogLinksTheFrozenSettlementBinding(t *testing.T) {
 	require.NoError(t, db.Create(binding).Error)
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())
 	context.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-	RecordConsumeLog(context, 7, RecordConsumeLogParams{ChannelId: 3, PromptTokens: 10, CompletionTokens: 2, ModelName: "model-v1", TokenName: "redacted", Quota: 12, TokenId: 42, Other: map[string]interface{}{"usage_semantic": "anthropic", "cache_creation_tokens": 0, "cache_tokens": 0}, SettlementBindingId: binding.Id})
+	require.NoError(t, RecordConsumeLog(context, 7, RecordConsumeLogParams{ChannelId: 3, PromptTokens: 10, CompletionTokens: 2, ModelName: "model-v1", TokenName: "redacted", Quota: 12, TokenId: 42, Other: map[string]interface{}{"usage_semantic": "anthropic", "cache_creation_tokens": 0, "cache_tokens": 0}, SettlementBindingId: binding.Id}))
 	var stored SettlementReadbackBinding
 	require.NoError(t, db.First(&stored, binding.Id).Error)
 	assert.Equal(t, SettlementReadbackBindingLogLinked, stored.State)

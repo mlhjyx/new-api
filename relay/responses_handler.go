@@ -160,7 +160,9 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			info.PriceData = originPriceData
 			return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithSkipRetry(), types.ErrOptionWithStatusCode(http.StatusBadRequest))
 		}
-		service.PostTextConsumeQuota(c, info, usageDto, nil)
+		if persistenceError := service.PostTextConsumeQuota(c, info, usageDto, nil); persistenceError != nil {
+			return persistenceError
+		}
 
 		info.OriginModelName = originModelName
 		info.PriceData = originPriceData
@@ -168,9 +170,14 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	}
 
 	if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") {
+		if info.SettlementBindingId > 0 {
+			return service.SettlementReceiptPersistenceError()
+		}
 		service.PostAudioConsumeQuota(c, info, usageDto, "")
 	} else {
-		service.PostTextConsumeQuota(c, info, usageDto, nil)
+		if persistenceError := service.PostTextConsumeQuota(c, info, usageDto, nil); persistenceError != nil {
+			return persistenceError
+		}
 	}
 	return nil
 }

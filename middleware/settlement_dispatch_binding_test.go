@@ -72,4 +72,26 @@ func TestSettlementDispatchBindingRequiresExactSupportedBoundRequest(t *testing.
 	SettlementDispatchBinding()(unboundContext)
 	assert.True(t, unboundContext.IsAborted())
 	assert.Equal(t, http.StatusBadRequest, unbound.Code)
+
+	for _, target := range []string{
+		"/v1/chat/completions/",
+		"/v1/chat/completions?mode=other",
+		"//v1/chat/completions",
+		"/v1/%63hat/completions",
+		"/v1/chat/completions/../images/generations",
+		"/v1beta/models/gemini:generateContent",
+		"/v1/realtime",
+		"/suno/submit/generate",
+	} {
+		rejected := httptest.NewRecorder()
+		rejectedContext, _ := gin.CreateTestContext(rejected)
+		rejectedContext.Set("token_id", 42)
+		rejectedContext.Set(common.RequestIdKey, "gateway-rejected")
+		rejectedContext.Request = httptest.NewRequest(http.MethodPost, target, nil)
+		rejectedContext.Request.Header.Set("X-New-API-Settlement-Request-Id", requestID)
+		rejectedContext.Request.Header.Set("X-New-API-Settlement-Nonce", nonce)
+		SettlementDispatchBinding()(rejectedContext)
+		assert.True(t, rejectedContext.IsAborted(), target)
+		assert.Equal(t, http.StatusForbidden, rejected.Code, target)
+	}
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -344,7 +345,16 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 	return "openai"
 }
 
-func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
+func SettlementReceiptPersistenceError() *types.NewAPIError {
+	return types.NewErrorWithStatusCode(
+		fmt.Errorf("settlement receipt persistence unavailable"),
+		types.ErrorCodeSettlementPersistenceFailed,
+		http.StatusInternalServerError,
+		types.ErrOptionWithSkipRetry(),
+	)
+}
+
+func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) *types.NewAPIError {
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
 	if usage == nil {
@@ -493,7 +503,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	attachQuotaSaturation(ctx, relayInfo, other)
 
-	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+	if err := model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:           relayInfo.ChannelId,
 		PromptTokens:        summary.PromptTokens,
 		CompletionTokens:    summary.CompletionTokens,
@@ -507,8 +517,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Group:               relayInfo.UsingGroup,
 		Other:               other,
 		SettlementBindingId: relayInfo.SettlementBindingId,
-	})
+	}); err != nil {
+		return SettlementReceiptPersistenceError()
+	}
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))
 	})
+	return nil
 }

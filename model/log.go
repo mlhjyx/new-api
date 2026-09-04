@@ -375,9 +375,12 @@ type RecordConsumeLogParams struct {
 	SettlementBindingId int                    `json:"-"`
 }
 
-func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
+func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) error {
 	if !common.LogConsumeEnabled {
-		return
+		if params.SettlementBindingId > 0 {
+			return errSettlementReadbackPersistence
+		}
+		return nil
 	}
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
@@ -427,6 +430,9 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	}
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
+		if params.SettlementBindingId > 0 {
+			return errSettlementReadbackPersistence
+		}
 	}
 	if common.DataExportEnabled {
 		LogQuotaData(QuotaDataLogParams{
@@ -442,6 +448,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			NodeName:  common.NodeName,
 		})
 	}
+	return nil
 }
 
 type RecordTaskBillingLogParams struct {

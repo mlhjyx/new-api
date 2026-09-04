@@ -85,9 +85,14 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		var containsAudioRatios = ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)
 
 		if containAudioTokens && containsAudioRatios {
+			if info.SettlementBindingId > 0 {
+				return service.SettlementReceiptPersistenceError()
+			}
 			service.PostAudioConsumeQuota(c, info, usage, "")
 		} else {
-			service.PostTextConsumeQuota(c, info, usage, nil)
+			if persistenceError := service.PostTextConsumeQuota(c, info, usage, nil); persistenceError != nil {
+				return persistenceError
+			}
 		}
 		return nil
 	}
@@ -215,9 +220,14 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	var containsAudioRatios = ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)
 
 	if containAudioTokens && containsAudioRatios {
+		if info.SettlementBindingId > 0 {
+			return service.SettlementReceiptPersistenceError()
+		}
 		service.PostAudioConsumeQuota(c, info, usage.(*dto.Usage), "")
 	} else {
-		service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
+		if persistenceError := service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil); persistenceError != nil {
+			return persistenceError
+		}
 	}
 	return nil
 }

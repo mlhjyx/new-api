@@ -54,6 +54,10 @@ func enforceSettlementDispatchBinding(c *gin.Context) bool {
 		c.AbortWithStatus(http.StatusForbidden)
 		return false
 	}
+	if c.Request.URL.RawQuery != "" || c.Request.URL.RawPath != "" {
+		c.AbortWithStatus(http.StatusForbidden)
+		return false
+	}
 	if _, supported := settlementDispatchPaths[c.Request.URL.Path]; !supported {
 		c.AbortWithStatus(http.StatusForbidden)
 		return false
