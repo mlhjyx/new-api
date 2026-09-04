@@ -124,6 +124,14 @@ func normalizeClickHouseDSN(dsn string) string {
 	return parsed.String()
 }
 
+func sqliteDSNWithSettlementForeignKeys(dsn string) string {
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	return dsn + separator + "_pragma=foreign_keys(1)"
+}
+
 func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error) {
 	dsn := os.Getenv(envName)
 	if dsn != "" {
@@ -150,7 +158,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error)
 		}
 		if strings.HasPrefix(dsn, "local") {
 			common.SysLog("SQL_DSN not set, using SQLite as database")
-			db, err := gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
+			db, err := gorm.Open(sqlite.Open(sqliteDSNWithSettlementForeignKeys(common.SQLitePath)), &gorm.Config{
 				PrepareStmt: true, // precompile SQL
 			})
 			return db, common.DatabaseTypeSQLite, err
@@ -172,7 +180,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error)
 	}
 	// Use SQLite
 	common.SysLog("SQL_DSN not set, using SQLite as database")
-	db, err := gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
+	db, err := gorm.Open(sqlite.Open(sqliteDSNWithSettlementForeignKeys(common.SQLitePath)), &gorm.Config{
 		PrepareStmt: true, // precompile SQL
 	})
 	return db, common.DatabaseTypeSQLite, err

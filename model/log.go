@@ -81,7 +81,7 @@ type Log struct {
 	// SettlementBindingId is used only by the exact settlement-readback path.
 	// It must never be populated from request text, Content, Other, or a
 	// gateway request id.
-	SettlementBindingId *int `json:"-" gorm:"uniqueIndex:idx_logs_settlement_binding_id"`
+	SettlementBindingId *int `json:"-"`
 }
 
 // logWithoutSettlementReadback is used only for a separately configured
