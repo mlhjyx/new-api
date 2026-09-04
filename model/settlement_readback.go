@@ -198,6 +198,11 @@ func EnsureSettlementReadbackSharedSchema(db *gorm.DB) error {
 	if err := db.AutoMigrate(&settlementReadbackLinkedLog{}); err != nil {
 		return err
 	}
+	if db.Dialector.Name() == "sqlite" {
+		if err := ensureSettlementReadbackSQLiteLogIndexes(db); err != nil {
+			return err
+		}
+	}
 	if !settlementReadbackSchemaReady(db) {
 		return errSettlementReadbackCredentialInvalid
 	}

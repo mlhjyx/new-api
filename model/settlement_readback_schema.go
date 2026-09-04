@@ -2,10 +2,27 @@ package model
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 
 	"gorm.io/gorm"
 )
+
+func ensureSettlementReadbackSQLiteLogIndexes(db *gorm.DB) error {
+	statement := &gorm.Statement{DB: db}
+	if err := statement.Parse(&Log{}); err != nil || statement.Schema == nil {
+		return fmt.Errorf("settlement readback log index schema is invalid")
+	}
+	for name := range statement.Schema.ParseIndexes() {
+		if db.Migrator().HasIndex(&Log{}, name) {
+			continue
+		}
+		if err := db.Migrator().CreateIndex(&Log{}, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func settlementReadbackSchemaReady(db *gorm.DB) bool {
 	if db == nil {
