@@ -87,6 +87,9 @@ jobs:
             dir --no-banner --redact --exit-code 1 \
             --gitleaks-ignore-path .gitleaksignore web/classic/dist
 
+      - name: Rehearse non-root persistent volume upgrade
+        run: sudo bash scripts/test-support/non-root-volume-upgrade.spec.sh
+
       - name: Run complete Go verification
         run: |
           go test ./...

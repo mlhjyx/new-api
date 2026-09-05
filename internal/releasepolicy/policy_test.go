@@ -87,6 +87,7 @@ func TestForkPullRequestCIContainsNoPublishSupplyChainGates(t *testing.T) {
 	assert.Contains(t, content, "containerd-snapshotter")
 	assert.Contains(t, content, "provenance: mode=max")
 	assert.Contains(t, content, "sbom: true")
+	assert.Contains(t, content, "sudo bash scripts/test-support/non-root-volume-upgrade.spec.sh")
 }
 
 func TestProductionDockerfileIsPackageManagerFreeAndIdentityBound(t *testing.T) {
