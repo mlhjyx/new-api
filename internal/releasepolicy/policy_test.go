@@ -237,12 +237,48 @@ func TestForkReleaseSeparatesSourceAssetsFromLaterImageEvidence(t *testing.T) {
 	assert.Contains(t, content, "gh release upload \"source-${REVISION}\" --repo mlhjyx/new-api")
 }
 
+func TestForkReleaseResumesOnlyVerifiedCorrespondingSourceWithoutRebindingImages(t *testing.T) {
+	workflow, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "growthos-new-api-release.yml"))
+	require.NoError(t, err)
+	content := string(workflow)
+	assert.Contains(t, content, "SOURCE_RELEASE_EXISTS=true")
+	assert.Contains(t, content, `(.assets | length == 3) and`)
+	assert.Contains(t, content, `[.assets[] | {name, state}] | sort_by(.name)`)
+	assert.Contains(t, content, "--source-sbom \"${RECOVERY_DIR}/new-api-source.spdx.json\"")
+	assert.Contains(t, content, "cmp -- \"${RECOVERY_DIR}/new-api-source-provenance.json\" \"${RECOVERY_DIR}/verified-provenance.json\"")
+	assert.Contains(t, content, "cmp -- \"${RECOVERY_DIR}/new-api-${REVISION}.tar.gz\" \"${RECOVERY_DIR}/verified-source.tar.gz\"")
+	assert.Contains(t, content, "if: env.SOURCE_RELEASE_EXISTS != 'true'")
+	assert.Contains(t, content, "exact image tag already exists; refusing rebind")
+	assert.NotContains(t, content, "source release already exists; refusing replacement")
+}
+
 func TestPolicyRejectsAnIncompleteOrMutablePublicationTransaction(t *testing.T) {
 	tests := []struct {
 		name        string
 		mutate      func(t *testing.T, path string)
 		expectedErr string
 	}{
+		{
+			name: "source recovery accepts prior image evidence",
+			mutate: func(t *testing.T, path string) {
+				replaceOnce(t, path, "(.assets | length == 3) and", "(.assets | length >= 3) and")
+			},
+			expectedErr: "publication preflight",
+		},
+		{
+			name: "source recovery without provenance validation",
+			mutate: func(t *testing.T, path string) {
+				replaceOnce(t, path, "cmp -- \"${RECOVERY_DIR}/new-api-source-provenance.json\"", "test -f \"${RECOVERY_DIR}/new-api-source-provenance.json\"")
+			},
+			expectedErr: "publication preflight",
+		},
+		{
+			name: "source recovery without archive validation",
+			mutate: func(t *testing.T, path string) {
+				replaceOnce(t, path, "cmp -- \"${RECOVERY_DIR}/new-api-${REVISION}.tar.gz\"", "test -f \"${RECOVERY_DIR}/new-api-${REVISION}.tar.gz\"")
+			},
+			expectedErr: "publication preflight",
+		},
 		{
 			name: "missing source release preflight",
 			mutate: func(t *testing.T, path string) {

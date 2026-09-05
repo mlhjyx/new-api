@@ -88,6 +88,36 @@ func TestGenerateSourceProvenanceBindsCleanExactRevision(t *testing.T) {
 	assert.Equal(t, provenance, decoded)
 }
 
+func TestSourceRecoveryReproducesOriginalBytesAndRejectsChangedSBOMIdentity(t *testing.T) {
+	fixture := newGitFixture(t)
+	revision := fixture.releaseCommit(t)
+	originalSBOM := fixture.externalFile(t, "original.spdx.json", []byte(`{"spdxVersion":"SPDX-2.3","creationInfo":{"created":"2026-09-05T00:00:00Z"}}`))
+	newSBOM := fixture.externalFile(t, "new.spdx.json", []byte(`{"spdxVersion":"SPDX-2.3","creationInfo":{"created":"2026-09-05T00:01:00Z"}}`))
+	generate := func(sbom string) ([]byte, []byte) {
+		t.Helper()
+		archive := filepath.Join(t.TempDir(), "source.tar.gz")
+		provenance, err := GenerateSource(context.Background(), SourceRequest{
+			RepoDir: fixture.dir, Revision: revision,
+			SourceURI:   "https://github.com/mlhjyx/new-api/tree/" + revision,
+			ArchiveURI:  "https://github.com/mlhjyx/new-api/releases/download/source-" + revision + "/new-api-" + revision + ".tar.gz",
+			ArchivePath: archive, SourceSBOMPath: sbom,
+		})
+		require.NoError(t, err)
+		encoded, err := MarshalSourceProvenance(provenance)
+		require.NoError(t, err)
+		archiveBytes, err := os.ReadFile(archive)
+		require.NoError(t, err)
+		return encoded, archiveBytes
+	}
+	original, archive := generate(originalSBOM)
+	recovered, recoveredArchive := generate(originalSBOM)
+	assert.Equal(t, original, recovered)
+	assert.Equal(t, archive, recoveredArchive)
+	changed, changedArchive := generate(newSBOM)
+	assert.NotEqual(t, original, changed, "a fresh scanner timestamp must not replace published provenance")
+	assert.Equal(t, archive, changedArchive)
+}
+
 func TestGenerateSourceProvenanceFailsClosedForDirtyOrIncompleteInputs(t *testing.T) {
 	fixture := newGitFixture(t)
 	revision := fixture.releaseCommit(t)

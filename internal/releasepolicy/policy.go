@@ -310,7 +310,13 @@ func verifyForkReleaseGates(content string) error {
 		"NAME_UNKNOWN",
 		"unable to prove source release absence",
 		"unable to prove image tag absence",
-		"source release already exists; refusing replacement",
+		"SOURCE_RELEASE_EXISTS=true",
+		"(.assets | length == 3) and",
+		"[.assets[] | {name, state}] | sort_by(.name)",
+		"--source-sbom \"${RECOVERY_DIR}/new-api-source.spdx.json\"",
+		"cmp -- \"${RECOVERY_DIR}/new-api-source-provenance.json\" \"${RECOVERY_DIR}/verified-provenance.json\"",
+		"cmp -- \"${RECOVERY_DIR}/new-api-${REVISION}.tar.gz\" \"${RECOVERY_DIR}/verified-source.tar.gz\"",
+		"cmp -- \"${RUNNER_TEMP}/new-api-${REVISION}.tar.gz\" \"${RECOVERY_DIR}/verified-source.tar.gz\"",
 		"exact image tag already exists; refusing rebind",
 	} {
 		if !strings.Contains(preflight, required) {
@@ -321,7 +327,8 @@ func verifyForkReleaseGates(content string) error {
 		return errors.New("fork release must never clobber immutable release assets")
 	}
 	sourcePublication := content[sourceIndex:publicReadbackIndex]
-	if !strings.Contains(sourcePublication, "gh release create \"source-${REVISION}\" --repo mlhjyx/new-api") ||
+	if !strings.Contains(sourcePublication, "if: env.SOURCE_RELEASE_EXISTS != 'true'") ||
+		!strings.Contains(sourcePublication, "gh release create \"source-${REVISION}\" --repo mlhjyx/new-api") ||
 		strings.Contains(sourcePublication, "new-api-image.spdx.json") ||
 		strings.Contains(sourcePublication, "new-api-release-receipt.json") ||
 		strings.Contains(sourcePublication, "image-sbom-attestation") {

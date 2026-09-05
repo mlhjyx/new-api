@@ -130,8 +130,40 @@ jobs:
           case "${SOURCE_RELEASE_STATUS}" in
             404) ;;
             200)
-              echo "source release already exists; refusing replacement" >&2
-              exit 1
+              # Recover only a complete, immutable source-only publication. Reuse
+              # its original SBOM: scanner timestamps can change between runs.
+              jq -e --arg tag "source-${REVISION}" --arg revision "${REVISION}" \
+                '.tag_name == $tag and .target_commitish == $revision and .draft == false and
+                 (.assets | length == 3) and
+                 (([.assets[] | {name, state}] | sort_by(.name)) ==
+                  ([{name: ("new-api-" + $revision + ".tar.gz"), state: "uploaded"},
+                    {name: "new-api-source.spdx.json", state: "uploaded"},
+                    {name: "new-api-source-provenance.json", state: "uploaded"}] | sort_by(.name)))' \
+                "${SOURCE_RELEASE_BODY}" >/dev/null
+              RECOVERY_DIR=$(mktemp -d "${RUNNER_TEMP}/new-api-source-recovery.XXXXXXXX")
+              for ASSET_NAME in "new-api-${REVISION}.tar.gz" new-api-source.spdx.json new-api-source-provenance.json; do
+                jq -e --arg name "${ASSET_NAME}" \
+                  '[.assets[] | select(.name == $name and .state == "uploaded")] | length == 1' \
+                  "${SOURCE_RELEASE_BODY}" >/dev/null
+                curl --fail --silent --show-error --location \
+                  --proto '=https' --proto-redir '=https' \
+                  --connect-timeout 10 --max-time 120 --max-filesize 1073741824 \
+                  --output "${RECOVERY_DIR}/${ASSET_NAME}" \
+                  "https://github.com/mlhjyx/new-api/releases/download/source-${REVISION}/${ASSET_NAME}"
+              done
+              go run ./cmd/release-provenance prepare-source \
+                --repo . --revision "${REVISION}" \
+                --source-uri "${SOURCE_URI}" --archive-uri "${SOURCE_ARCHIVE_URI}" \
+                --archive-output "${RECOVERY_DIR}/verified-source.tar.gz" \
+                --source-sbom "${RECOVERY_DIR}/new-api-source.spdx.json" \
+                --output "${RECOVERY_DIR}/verified-provenance.json"
+              cmp -- "${RECOVERY_DIR}/new-api-source-provenance.json" "${RECOVERY_DIR}/verified-provenance.json"
+              cmp -- "${RECOVERY_DIR}/new-api-${REVISION}.tar.gz" "${RECOVERY_DIR}/verified-source.tar.gz"
+              cmp -- "${RUNNER_TEMP}/new-api-${REVISION}.tar.gz" "${RECOVERY_DIR}/verified-source.tar.gz"
+              cp -- "${RECOVERY_DIR}/new-api-source.spdx.json" "${RUNNER_TEMP}/new-api-source.spdx.json"
+              cp -- "${RECOVERY_DIR}/new-api-source-provenance.json" "${RUNNER_TEMP}/new-api-source-provenance.json"
+              echo "SOURCE_SBOM_SHA256=$(jq -r .sbom.source_dependency_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+              echo "SOURCE_RELEASE_EXISTS=true" >> "${GITHUB_ENV}"
               ;;
             *)
               echo "unable to prove source release absence" >&2
@@ -177,6 +209,7 @@ jobs:
           esac
 
       - name: Publish immutable corresponding source
+        if: env.SOURCE_RELEASE_EXISTS != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

@@ -47,3 +47,28 @@ directory, browser repository context, or the `gh` default repository.
 
 The workflow's own repository guard, exact branch/commit admission, protected
 environment, license gate and digest-only image contract remain mandatory.
+
+## Interrupted publication recovery
+
+Dispatch the same exact revision again only while it is still the protected
+release branch head. A complete corresponding-source release is reusable when
+its asset set is exactly the three original uploaded source assets and all are
+publicly retrievable. Any extra asset (including image SBOM, receipt or
+attestation), duplicate name, or unfinished upload holds recovery even when
+the image tag is currently absent. The workflow reconstructs
+the archive and provenance from the admitted Git revision using the original
+source SBOM, then requires byte-for-byte archive and provenance equality. A
+new scanner invocation cannot replace the original SBOM or its recorded digest.
+The verified source release is never recreated or overwritten. This permits
+recovery after a public source readback, registry login, or Docker build failure
+before an image tag exists.
+
+Recovery remains fail-closed for a missing/partial source asset, a mismatch, or
+an existing exact image tag. A tag published before a later signing/evidence
+failure is **not** trusted merely because it has the expected name or labels.
+Do not rerun a build against that tag, delete it, replace release assets, or
+attest an unproven existing image. Preserve the failed run and immutable assets,
+hold cutover, and use an independently reviewed forward-fix revision. Automatic
+post-image recovery is not implemented; it requires verification of the original
+build attestation and a digest-bound evidence-resume protocol. This is a bounded
+source-stage retry, not a claim that arbitrary partial releases are recoverable.
