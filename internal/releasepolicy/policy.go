@@ -259,6 +259,9 @@ func verifyForkPullRequestGates(content string) error {
 		"LC_ALL=C sort -u release/go-vet-baseline.txt",
 		"diff -u \"${RUNNER_TEMP}/go-vet.expected.txt\" \"${RUNNER_TEMP}/go-vet.actual.txt\"",
 		"go test -race ./model ./controller ./router -run Settlement -count=1",
+		"bun install --filter ./classic --frozen-lockfile",
+		"git archive --format=tar HEAD:web",
+		"containerd-snapshotter",
 	}
 	for _, value := range required {
 		if !strings.Contains(content, value) {

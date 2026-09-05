@@ -82,6 +82,11 @@ func TestForkPullRequestCIContainsNoPublishSupplyChainGates(t *testing.T) {
 	assert.Contains(t, content, "grep -RFl \"growthos-lobe-flex-adapter\"")
 	assert.Contains(t, content, "go test -race ./model ./controller ./router -run Settlement -count=1")
 	assert.NotContains(t, content, "go test -race ./model ./controller ./middleware ./router ./relay/channel ./service")
+	assert.Contains(t, content, "bun install --filter ./classic --frozen-lockfile")
+	assert.Contains(t, content, "git archive --format=tar HEAD:web")
+	assert.Contains(t, content, "containerd-snapshotter")
+	assert.Contains(t, content, "provenance: mode=max")
+	assert.Contains(t, content, "sbom: true")
 }
 
 func TestProductionDockerfileIsPackageManagerFreeAndIdentityBound(t *testing.T) {

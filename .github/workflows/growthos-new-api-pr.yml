@@ -52,8 +52,16 @@ jobs:
           bun install --frozen-lockfile
           cd default
           DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=pr-${GITHUB_SHA} bun run build
-          cd ../classic
+          # Dockerfile builds classic in its own filtered, clean Bun stage.
+          # Sharing default's hoisted date-fns v4 breaks classic's tz v1 peer.
+          NEW_API_CLASSIC_BUILD_ROOT=$(mktemp -d "${RUNNER_TEMP}/new-api-classic.XXXXXX")
+          git archive --format=tar HEAD:web | tar -xf - -C "${NEW_API_CLASSIC_BUILD_ROOT}"
+          cd "${NEW_API_CLASSIC_BUILD_ROOT}"
+          bun install --filter ./classic --frozen-lockfile
+          cd classic
           VITE_REACT_APP_VERSION=pr-${GITHUB_SHA} bun run build
+          mkdir -p "${GITHUB_WORKSPACE}/web/classic/dist"
+          cp -a dist/. "${GITHUB_WORKSPACE}/web/classic/dist/"
 
       - name: Verify private icon adapter reachability
         run: |
@@ -178,6 +186,14 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+
+      - name: Enable containerd image storage for local attestations
+        uses: docker/setup-docker-action@e43656e248c0bd0647d3f5c195d116aacf6fcaf4 # v4
+        with:
+          version: 'v28.0.4'
+          set-host: true
+          daemon-config: |
+            {"features":{"containerd-snapshotter":true}}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
