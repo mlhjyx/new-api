@@ -435,15 +435,38 @@ func GetUsableSettlementReadbackCredential(secret string, keyring *SettlementRea
 	return &credential, nil
 }
 
+// HasActiveSettlementReadbackCredential returns false without error only for a
+// token that has never enrolled in settlement readback. An enrolled token with
+// no currently usable reader returns an error so callers cannot silently fall
+// back to legacy dispatch or broad log reads.
 func HasActiveSettlementReadbackCredential(dispatchTokenID int) (bool, error) {
 	if DB == nil || dispatchTokenID < 1 {
 		return false, errSettlementReadbackCredentialInvalid
 	}
-	var count int64
-	err := DB.Model(&SettlementReadbackCredential{}).
-		Where("dispatch_token_id = ? AND status = ?", dispatchTokenID, SettlementReadbackCredentialActive).
-		Count(&count).Error
-	return count > 0, err
+	var state struct {
+		Enrolled int64 `gorm:"column:enrolled"`
+		Usable   int64 `gorm:"column:usable"`
+	}
+	if err := DB.Model(&SettlementReadbackCredential{}).
+		Select(
+			"COUNT(*) AS enrolled, COUNT(CASE WHEN status = ? AND (rotation_ends_at = 0 OR rotation_ends_at > ?) THEN 1 END) AS usable",
+			SettlementReadbackCredentialActive,
+			time.Now().Unix(),
+		).
+		Where("dispatch_token_id = ?", dispatchTokenID).
+		Scan(&state).Error; err != nil {
+		return false, err
+	}
+	if state.Enrolled == 0 {
+		return false, nil
+	}
+	if state.Usable == 0 {
+		// Credential history is the one-way enrollment discriminator. Losing
+		// every usable reader must fail closed; returning an ordinary unbound
+		// result here would silently restore the legacy no-CAS dispatch path.
+		return false, errSettlementReadbackCredentialInvalid
+	}
+	return true, nil
 }
 
 func CreateOrGetSettlementReadbackBinding(db *gorm.DB, dispatchTokenID int, requestDigest string, nonceDigest string, gatewayRequestID string) (*SettlementReadbackBinding, bool, error) {

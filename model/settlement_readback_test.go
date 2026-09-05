@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/gin-gonic/gin"
@@ -174,6 +175,55 @@ func TestSettlementReadbackCredentialLifecycleEnforcesRotationAndRevocation(t *t
 	require.NoError(t, db.First(&stored, second.Id).Error)
 	assert.Equal(t, SettlementReadbackCredentialRevoked, stored.Status)
 	assert.Equal(t, now+3, stored.RevokedAt)
+}
+
+func TestSettlementReadbackEnrollmentWithoutUsableReaderFailsClosed(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-enrollment?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&SettlementReadbackCredential{}))
+	originalDB := DB
+	DB = db
+	t.Cleanup(func() { DB = originalDB })
+
+	now := time.Now().Unix()
+	require.NoError(t, db.Create(&SettlementReadbackCredential{
+		LookupPrefix:    "expiredreader001",
+		SecretDigest:    strings.Repeat("a", 64),
+		PepperVersion:   "pepper-v1",
+		DispatchTokenId: 42,
+		Status:          SettlementReadbackCredentialActive,
+		CreatedAt:       now - 600,
+		RotationEndsAt:  now - 1,
+	}).Error)
+	require.NoError(t, db.Create(&SettlementReadbackCredential{
+		LookupPrefix:    "revokedreader001",
+		SecretDigest:    strings.Repeat("b", 64),
+		PepperVersion:   "pepper-v1",
+		DispatchTokenId: 42,
+		Status:          SettlementReadbackCredentialRevoked,
+		CreatedAt:       now - 300,
+		RevokedAt:       now - 10,
+	}).Error)
+	require.NoError(t, db.Create(&SettlementReadbackCredential{
+		LookupPrefix:    "usablereader0001",
+		SecretDigest:    strings.Repeat("c", 64),
+		PepperVersion:   "pepper-v1",
+		DispatchTokenId: 43,
+		Status:          SettlementReadbackCredentialActive,
+		CreatedAt:       now,
+	}).Error)
+
+	bound, err := HasActiveSettlementReadbackCredential(42)
+	assert.False(t, bound)
+	assert.Error(t, err, "an enrolled token without a usable reader must not fall back to legacy dispatch")
+
+	bound, err = HasActiveSettlementReadbackCredential(43)
+	assert.True(t, bound)
+	assert.NoError(t, err)
+
+	bound, err = HasActiveSettlementReadbackCredential(44)
+	assert.False(t, bound)
+	assert.NoError(t, err, "a token with no credential history remains an ordinary legacy token")
 }
 
 func TestLoadSettlementReadbackPepperKeyringRequiresPrivateRegularFile(t *testing.T) {

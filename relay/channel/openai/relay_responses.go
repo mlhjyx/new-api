@@ -17,6 +17,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func isCompletedResponsesTerminal(streamResponse *dto.ResponsesStreamResponse) bool {
+	return streamResponse != nil &&
+		streamResponse.Type == "response.completed" &&
+		streamResponse.Response != nil &&
+		string(streamResponse.Response.Status) == `"completed"`
+}
+
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
@@ -113,6 +120,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					c.Set("image_generation_call_quality", streamResponse.Response.GetQuality())
 					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
 				}
+			}
+			if isCompletedResponsesTerminal(&streamResponse) {
+				info.StreamStatus.MarkTerminalEventObserved()
+				sr.Done()
 			}
 		case "response.output_text.delta":
 			// 处理输出文本

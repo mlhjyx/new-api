@@ -425,14 +425,21 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
+		if relayInfo.SettlementBindingId > 0 {
+			// The upstream payload is already written at this point. Keep the
+			// existing pre-consumption and leave the binding pending rather
+			// than appending an error to a valid response or publishing a false
+			// exact receipt.
+			return nil
+		}
 	}
 
 	logModel := summary.ModelName
-	if strings.HasPrefix(logModel, "gpt-4-gizmo") {
+	if relayInfo.SettlementBindingId == 0 && strings.HasPrefix(logModel, "gpt-4-gizmo") {
 		logModel = "gpt-4-gizmo-*"
 		extraContent = append(extraContent, fmt.Sprintf("模型 %s", summary.ModelName))
 	}
-	if strings.HasPrefix(logModel, "gpt-4o-gizmo") {
+	if relayInfo.SettlementBindingId == 0 && strings.HasPrefix(logModel, "gpt-4o-gizmo") {
 		logModel = "gpt-4o-gizmo-*"
 		extraContent = append(extraContent, fmt.Sprintf("模型 %s", summary.ModelName))
 	}

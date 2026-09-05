@@ -305,6 +305,10 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				return
 			}
 		}
+		if isCompletedResponsesTerminal(&streamResp) {
+			info.StreamStatus.MarkTerminalEventObserved()
+			sr.Done()
+		}
 	})
 
 	if streamErr != nil {
