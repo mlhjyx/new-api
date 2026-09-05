@@ -215,11 +215,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "source-${REVISION}" >/dev/null 2>&1; then
+          if gh release view "source-${REVISION}" --repo mlhjyx/new-api >/dev/null 2>&1; then
             echo "source release already exists; refusing replacement" >&2
             exit 1
           fi
-          gh release create "source-${REVISION}" \
+          gh release create "source-${REVISION}" --repo mlhjyx/new-api \
             --target "${REVISION}" \
             --title "New API corresponding source ${REVISION}" \
             --notes "Corresponding Source for ghcr.io/mlhjyx/new-api@${IMAGE_DIGEST}. Upstream identity and license notices are preserved in the attached source archive." \

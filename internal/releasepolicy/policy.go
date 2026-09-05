@@ -30,23 +30,24 @@ var actionReferencePattern = regexp.MustCompile(`(?m)^\s*-?\s*uses:\s*[^\s#]+@([
 var commitReferencePattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 type Report struct {
-	ForkImageRepository          string
-	ReleaseBranch                string
-	GuardedUpstreamWorkflows     int
-	PinnedActionReferences       int
-	RuntimeUser                  string
-	RuntimeBase                  string
-	BoundedModuleDownload        bool
-	ChecksummedModuleProxy       bool
-	LicenseHoldFailClosed        bool
-	ProtectedIdentityPreserved   bool
-	PullRequestTemplatePreserved bool
-	AIAssistanceDisclosed        bool
-	SecretScanPinned             bool
-	SourceAndImageSBOMChecks     bool
-	CorrespondingSourceSmoke     bool
-	GoVetBaselineFailClosed      bool
-	PrivateLobeAdapterBound      bool
+	ForkImageRepository                string
+	ReleaseBranch                      string
+	GuardedUpstreamWorkflows           int
+	PinnedActionReferences             int
+	RuntimeUser                        string
+	RuntimeBase                        string
+	BoundedModuleDownload              bool
+	ChecksummedModuleProxy             bool
+	LicenseHoldFailClosed              bool
+	ProtectedIdentityPreserved         bool
+	PullRequestTemplatePreserved       bool
+	AIAssistanceDisclosed              bool
+	SecretScanPinned                   bool
+	SourceAndImageSBOMChecks           bool
+	CorrespondingSourceSmoke           bool
+	GoVetBaselineFailClosed            bool
+	PrivateLobeAdapterBound            bool
+	ForkWorkflowRegistrationDocumented bool
 }
 
 func VerifyRepository(repoDir string) (Report, error) {
@@ -127,6 +128,10 @@ func VerifyRepository(repoDir string) (Report, error) {
 	report.CorrespondingSourceSmoke = true
 	report.GoVetBaselineFailClosed = true
 	report.PrivateLobeAdapterBound = true
+	if err := verifyForkWorkflowRegistration(repoDir); err != nil {
+		return Report{}, err
+	}
+	report.ForkWorkflowRegistrationDocumented = true
 
 	releaseWorkflow, err := os.ReadFile(filepath.Join(workflowDir, "growthos-new-api-release.yml"))
 	if err != nil {
@@ -162,6 +167,30 @@ func VerifyRepository(repoDir string) (Report, error) {
 		return Report{}, err
 	}
 	return report, nil
+}
+
+func verifyForkWorkflowRegistration(repoDir string) error {
+	data, err := os.ReadFile(filepath.Join(repoDir, "release", "fork-workflow-registration.md"))
+	if err != nil {
+		return errors.New("fork workflow registration contract is missing")
+	}
+	content := string(data)
+	for _, required := range []string{
+		"`mlhjyx/new-api`",
+		"`production-parity/settlement-readback-v1`",
+		"`bde9b2f44887d34ec54799ae191d50f97914359e`",
+		"--repo mlhjyx/new-api",
+		"workflow must exist on the fork default branch",
+		"163 unreviewed upstream commits",
+	} {
+		if !strings.Contains(content, required) {
+			return errors.New("fork workflow registration contract is incomplete")
+		}
+	}
+	if strings.Contains(content, "--repo QuantumNous/new-api") {
+		return errors.New("fork workflow registration must never target upstream")
+	}
+	return nil
 }
 
 func verifyProtectedIdentity(repoDir string) error {
@@ -256,6 +285,10 @@ func verifyForkReleaseGates(content string) error {
 	if !strings.Contains(content, "output-file: ${{ runner.temp }}/new-api-source.spdx.json") ||
 		!strings.Contains(content, "output-file: ${{ runner.temp }}/new-api-image.spdx.json") {
 		return errors.New("fork release must generate source and final-image SBOMs")
+	}
+	if !strings.Contains(content, "gh release view \"source-${REVISION}\" --repo mlhjyx/new-api") ||
+		!strings.Contains(content, "gh release create \"source-${REVISION}\" --repo mlhjyx/new-api") {
+		return errors.New("fork release GitHub commands must select the exact fork repository")
 	}
 	return nil
 }

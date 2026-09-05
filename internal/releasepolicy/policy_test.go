@@ -33,6 +33,7 @@ func TestRepositoryWorkflowsHaveOneFailClosedForkReleasePath(t *testing.T) {
 	assert.True(t, report.CorrespondingSourceSmoke)
 	assert.True(t, report.GoVetBaselineFailClosed)
 	assert.True(t, report.PrivateLobeAdapterBound)
+	assert.True(t, report.ForkWorkflowRegistrationDocumented)
 }
 
 func TestPolicyRejectsProtectedProjectIdentityDrift(t *testing.T) {
@@ -185,6 +186,21 @@ func TestPolicyNeverAllowsALicenseHoldInRelease(t *testing.T) {
 	assert.ErrorContains(t, err, "license HOLD")
 }
 
+func TestForkWorkflowRegistrationUsesOnlyTheExactForkAndReleaseBranch(t *testing.T) {
+	repo := copyReleasePolicyFixture(t)
+	registration, err := os.ReadFile(filepath.Join(repo, "release/fork-workflow-registration.md"))
+	require.NoError(t, err)
+	content := string(registration)
+
+	assert.Contains(t, content, "`mlhjyx/new-api`")
+	assert.Contains(t, content, "`production-parity/settlement-readback-v1`")
+	assert.Contains(t, content, "`bde9b2f44887d34ec54799ae191d50f97914359e`")
+	assert.Contains(t, content, "--repo mlhjyx/new-api")
+	assert.Contains(t, content, "workflow must exist on the fork default branch")
+	assert.Contains(t, content, "163 unreviewed upstream commits")
+	assert.NotContains(t, content, "--repo QuantumNous/new-api")
+}
+
 func copyReleasePolicyFixture(t *testing.T) string {
 	t.Helper()
 	sourceRoot := filepath.Clean(filepath.Join("..", ".."))
@@ -204,6 +220,7 @@ func copyReleasePolicyFixture(t *testing.T) string {
 		".github/workflows/growthos-new-api-release.yml",
 		"release/pull-request-description.md",
 		"release/go-vet-baseline.txt",
+		"release/fork-workflow-registration.md",
 	} {
 		source := filepath.Join(sourceRoot, filepath.FromSlash(name))
 		target := filepath.Join(targetRoot, filepath.FromSlash(name))
