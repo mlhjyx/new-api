@@ -14,6 +14,10 @@ permissions:
   id-token: write
   attestations: write
 
+concurrency:
+  group: new-api-exact-release-${{ inputs.revision }}
+  cancel-in-progress: false
+
 jobs:
   publish-exact-oci:
     if: github.repository == 'mlhjyx/new-api'
@@ -99,6 +103,102 @@ jobs:
           echo "LICENSE_SHA256=$(jq -r .license.license_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
           echo "NOTICE_SHA256=$(jq -r .license.notice_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
           echo "THIRD_PARTY_SHA256=$(jq -r .license.third_party_sha256 "${RUNNER_TEMP}/new-api-source-provenance.json")" >> "${GITHUB_ENV}"
+
+      - name: Preflight immutable publication targets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          API_AUTH_CONFIG="${RUNNER_TEMP}/github-api-auth.curl"
+          GHCR_NETRC="${RUNNER_TEMP}/ghcr-preflight.netrc"
+          GHCR_AUTH_CONFIG="${RUNNER_TEMP}/ghcr-auth.curl"
+          SOURCE_RELEASE_BODY="${RUNNER_TEMP}/source-release-preflight.json"
+          IMAGE_MANIFEST_BODY="${RUNNER_TEMP}/image-manifest-preflight.json"
+          trap 'rm -f "${API_AUTH_CONFIG}" "${GHCR_NETRC}" "${GHCR_AUTH_CONFIG}"' EXIT
+          umask 077
+          printf 'header = "Authorization: Bearer %s"\n' "${GH_TOKEN}" > "${API_AUTH_CONFIG}"
+          if ! SOURCE_RELEASE_STATUS=$(curl --config "${API_AUTH_CONFIG}" \
+            --silent --show-error \
+            --output "${SOURCE_RELEASE_BODY}" \
+            --write-out '%{http_code}' \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/mlhjyx/new-api/releases/tags/source-${REVISION}"); then
+            echo "unable to prove source release absence" >&2
+            exit 1
+          fi
+          case "${SOURCE_RELEASE_STATUS}" in
+            404) ;;
+            200)
+              echo "source release already exists; refusing replacement" >&2
+              exit 1
+              ;;
+            *)
+              echo "unable to prove source release absence" >&2
+              exit 1
+              ;;
+          esac
+
+          printf 'machine ghcr.io\nlogin %s\npassword %s\n' "${GITHUB_ACTOR}" "${GH_TOKEN}" > "${GHCR_NETRC}"
+          if ! REGISTRY_TOKEN=$(curl --netrc-file "${GHCR_NETRC}" \
+            --silent --show-error --fail-with-body \
+            'https://ghcr.io/token?service=ghcr.io&scope=repository%3Amlhjyx%2Fnew-api%3Apull' |
+            jq -er '.token | strings | select(length > 0)'); then
+            echo "unable to prove image tag absence" >&2
+            exit 1
+          fi
+          printf 'header = "Authorization: Bearer %s"\n' "${REGISTRY_TOKEN}" > "${GHCR_AUTH_CONFIG}"
+          unset REGISTRY_TOKEN
+          if ! IMAGE_MANIFEST_STATUS=$(curl --config "${GHCR_AUTH_CONFIG}" \
+            --silent --show-error \
+            --output "${IMAGE_MANIFEST_BODY}" \
+            --write-out '%{http_code}' \
+            --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/mlhjyx/new-api/manifests/${IMAGE_TAG}"); then
+            echo "unable to prove image tag absence" >&2
+            exit 1
+          fi
+          case "${IMAGE_MANIFEST_STATUS}" in
+            200)
+              echo "exact image tag already exists; refusing rebind" >&2
+              exit 1
+              ;;
+            404)
+              jq -e '.errors | type == "array" and length > 0 and all(.[]; .code == "MANIFEST_UNKNOWN" or .code == "NAME_UNKNOWN")' \
+                "${IMAGE_MANIFEST_BODY}" >/dev/null || {
+                  echo "unable to prove image tag absence" >&2
+                  exit 1
+                }
+              ;;
+            *)
+              echo "unable to prove image tag absence" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Publish immutable corresponding source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "source-${REVISION}" --repo mlhjyx/new-api \
+            --target "${REVISION}" \
+            --title "New API corresponding source ${REVISION}" \
+            --notes "Immutable Corresponding Source for exact fork revision ${REVISION}. OCI publication is prohibited until the attached archive is publicly downloaded and its recorded digest is verified." \
+            "${RUNNER_TEMP}/new-api-${REVISION}.tar.gz" \
+            "${RUNNER_TEMP}/new-api-source.spdx.json" \
+            "${RUNNER_TEMP}/new-api-source-provenance.json"
+
+      - name: Verify public corresponding source digest
+        run: |
+          PUBLIC_SOURCE_ARCHIVE="${RUNNER_TEMP}/public-new-api-${REVISION}.tar.gz"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' \
+            --connect-timeout 10 --max-time 60 \
+            --retry 4 --retry-all-errors --retry-delay 2 \
+            --output "${PUBLIC_SOURCE_ARCHIVE}" \
+            "${SOURCE_ARCHIVE_URI}"
+          printf '%s  %s\n' "${SOURCE_ARCHIVE_SHA256}" "${PUBLIC_SOURCE_ARCHIVE}" |
+            sha256sum --check --strict
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
@@ -211,21 +311,11 @@ jobs:
             --receipt "${RUNNER_TEMP}/new-api-release-receipt.json" \
             --source-sbom "${RUNNER_TEMP}/new-api-source.spdx.json"
 
-      - name: Publish immutable corresponding-source release
+      - name: Append immutable image evidence
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "source-${REVISION}" --repo mlhjyx/new-api >/dev/null 2>&1; then
-            echo "source release already exists; refusing replacement" >&2
-            exit 1
-          fi
-          gh release create "source-${REVISION}" --repo mlhjyx/new-api \
-            --target "${REVISION}" \
-            --title "New API corresponding source ${REVISION}" \
-            --notes "Corresponding Source for ghcr.io/mlhjyx/new-api@${IMAGE_DIGEST}. Upstream identity and license notices are preserved in the attached source archive." \
-            "${RUNNER_TEMP}/new-api-${REVISION}.tar.gz" \
-            "${RUNNER_TEMP}/new-api-source.spdx.json" \
-            "${RUNNER_TEMP}/new-api-source-provenance.json" \
+          gh release upload "source-${REVISION}" --repo mlhjyx/new-api \
             "${RUNNER_TEMP}/new-api-image.spdx.json" \
             "${RUNNER_TEMP}/new-api-release-receipt.json" \
             '${{ steps.image-sbom-attestation.outputs.bundle-path }}'

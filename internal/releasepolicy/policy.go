@@ -277,20 +277,74 @@ func verifyForkPullRequestGates(content string) error {
 func verifyForkReleaseGates(content string) error {
 	secretIndex := strings.Index(content, pinnedGitleaksImage)
 	licenseIndex := strings.Index(content, "release-license verify --repo .")
+	preflightIndex := uniqueMarkerIndex(content, "- name: Preflight immutable publication targets")
+	sourceIndex := uniqueMarkerIndex(content, "- name: Publish immutable corresponding source")
+	publicReadbackIndex := uniqueMarkerIndex(content, "- name: Verify public corresponding source digest")
 	loginIndex := strings.Index(content, "docker/login-action")
-	publishIndex := strings.Index(content, "Build and publish one exact image")
-	if secretIndex < 0 || licenseIndex < 0 || loginIndex < 0 || publishIndex < 0 || secretIndex > loginIndex || licenseIndex > loginIndex || loginIndex > publishIndex {
-		return errors.New("fork release must pass pinned secret and fail-closed license gates before registry publication")
+	publishIndex := uniqueMarkerIndex(content, "- name: Build and publish one exact image")
+	finalizeIndex := uniqueMarkerIndex(content, "- name: Sign exact digest and finalize receipt")
+	imageEvidenceIndex := uniqueMarkerIndex(content, "- name: Append immutable image evidence")
+	if preflightIndex < 0 || sourceIndex < 0 || publicReadbackIndex < 0 || publishIndex < 0 || finalizeIndex < 0 || imageEvidenceIndex < 0 ||
+		!(preflightIndex < sourceIndex && sourceIndex < publicReadbackIndex && publicReadbackIndex < loginIndex && loginIndex < publishIndex && publishIndex < finalizeIndex && finalizeIndex < imageEvidenceIndex) {
+		return errors.New("fork release publication transaction order is invalid")
+	}
+	if secretIndex < 0 || licenseIndex < 0 || loginIndex < 0 || secretIndex > preflightIndex || licenseIndex > preflightIndex {
+		return errors.New("fork release must pass pinned secret and fail-closed license gates before publication preflight")
 	}
 	if !strings.Contains(content, "output-file: ${{ runner.temp }}/new-api-source.spdx.json") ||
 		!strings.Contains(content, "output-file: ${{ runner.temp }}/new-api-image.spdx.json") {
 		return errors.New("fork release must generate source and final-image SBOMs")
 	}
-	if !strings.Contains(content, "gh release view \"source-${REVISION}\" --repo mlhjyx/new-api") ||
-		!strings.Contains(content, "gh release create \"source-${REVISION}\" --repo mlhjyx/new-api") {
+	if !strings.Contains(content, "group: new-api-exact-release-${{ inputs.revision }}") ||
+		!strings.Contains(content, "cancel-in-progress: false") {
+		return errors.New("fork release must serialize same-revision publication")
+	}
+	preflight := content[preflightIndex:sourceIndex]
+	for _, required := range []string{
+		"SOURCE_RELEASE_STATUS=$(curl",
+		"IMAGE_MANIFEST_STATUS=$(curl",
+		"MANIFEST_UNKNOWN",
+		"NAME_UNKNOWN",
+		"unable to prove source release absence",
+		"unable to prove image tag absence",
+		"source release already exists; refusing replacement",
+		"exact image tag already exists; refusing rebind",
+	} {
+		if !strings.Contains(preflight, required) {
+			return errors.New("fork release publication preflight is incomplete")
+		}
+	}
+	if strings.Contains(content, "--clobber") {
+		return errors.New("fork release must never clobber immutable release assets")
+	}
+	sourcePublication := content[sourceIndex:publicReadbackIndex]
+	if !strings.Contains(sourcePublication, "gh release create \"source-${REVISION}\" --repo mlhjyx/new-api") ||
+		strings.Contains(sourcePublication, "new-api-image.spdx.json") ||
+		strings.Contains(sourcePublication, "new-api-release-receipt.json") ||
+		strings.Contains(sourcePublication, "image-sbom-attestation") {
+		return errors.New("fork release must publish source-only immutable assets before the image")
+	}
+	publicReadback := content[publicReadbackIndex:loginIndex]
+	if !strings.Contains(publicReadback, "PUBLIC_SOURCE_ARCHIVE=") ||
+		!strings.Contains(publicReadback, "${SOURCE_ARCHIVE_URI}") ||
+		!strings.Contains(publicReadback, "sha256sum --check --strict") {
+		return errors.New("fork release must verify the public source digest before image publication")
+	}
+	imageEvidence := content[imageEvidenceIndex:]
+	if !strings.Contains(imageEvidence, "gh release upload \"source-${REVISION}\" --repo mlhjyx/new-api") ||
+		!strings.Contains(imageEvidence, "new-api-image.spdx.json") ||
+		!strings.Contains(imageEvidence, "new-api-release-receipt.json") ||
+		!strings.Contains(imageEvidence, "image-sbom-attestation.outputs.bundle-path") {
 		return errors.New("fork release GitHub commands must select the exact fork repository")
 	}
 	return nil
+}
+
+func uniqueMarkerIndex(content string, marker string) int {
+	if strings.Count(content, marker) != 1 {
+		return -1
+	}
+	return strings.Index(content, marker)
 }
 
 func sha256File(path string) (string, error) {

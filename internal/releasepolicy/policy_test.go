@@ -232,6 +232,69 @@ func TestForkReleaseSeparatesSourceAssetsFromLaterImageEvidence(t *testing.T) {
 	assert.Contains(t, content, "gh release upload \"source-${REVISION}\" --repo mlhjyx/new-api")
 }
 
+func TestPolicyRejectsAnIncompleteOrMutablePublicationTransaction(t *testing.T) {
+	tests := []struct {
+		name        string
+		mutate      func(t *testing.T, path string)
+		expectedErr string
+	}{
+		{
+			name: "missing source release preflight",
+			mutate: func(t *testing.T, path string) {
+				replaceOnce(t, path, "SOURCE_RELEASE_STATUS=$(curl", "SOURCE_LOOKUP_STATUS=$(curl")
+			},
+			expectedErr: "publication preflight",
+		},
+		{
+			name: "missing image manifest absence proof",
+			mutate: func(t *testing.T, path string) {
+				replaceOnce(t, path, ".code == \"MANIFEST_UNKNOWN\"", ".code == \"UNKNOWN\"")
+			},
+			expectedErr: "publication preflight",
+		},
+		{
+			name: "source published after image",
+			mutate: func(t *testing.T, path string) {
+				swapOnce(t, path, "Publish immutable corresponding source", "Build and publish one exact image")
+			},
+			expectedErr: "publication transaction order",
+		},
+		{
+			name: "missing public archive digest readback",
+			mutate: func(t *testing.T, path string) {
+				replaceOnce(t, path, "sha256sum --check --strict", "sha256sum --version")
+			},
+			expectedErr: "public source digest",
+		},
+		{
+			name: "asset clobber enabled",
+			mutate: func(t *testing.T, path string) {
+				replaceOnce(t, path, "gh release upload \"source-${REVISION}\" --repo mlhjyx/new-api", "gh release upload \"source-${REVISION}\" --repo mlhjyx/new-api --clobber")
+			},
+			expectedErr: "clobber",
+		},
+		{
+			name: "same revision concurrency disabled",
+			mutate: func(t *testing.T, path string) {
+				replaceOnce(t, path, "group: new-api-exact-release-${{ inputs.revision }}", "group: new-api-exact-release")
+			},
+			expectedErr: "same-revision publication",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := copyReleasePolicyFixture(t)
+			path := filepath.Join(repo, ".github/workflows/growthos-new-api-release.yml")
+			test.mutate(t, path)
+
+			_, err := VerifyRepository(repo)
+
+			assert.ErrorContains(t, err, test.expectedErr)
+		})
+	}
+}
+
 func TestForkWorkflowRegistrationUsesOnlyTheExactForkAndReleaseBranch(t *testing.T) {
 	repo := copyReleasePolicyFixture(t)
 	registration, err := os.ReadFile(filepath.Join(repo, "release/fork-workflow-registration.md"))
@@ -285,5 +348,20 @@ func replaceOnce(t *testing.T, path string, oldValue string, newValue string) {
 	content := string(data)
 	require.Equal(t, 1, strings.Count(content, oldValue), "fixture mutation must be exact")
 	content = strings.Replace(content, oldValue, newValue, 1)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+}
+
+func swapOnce(t *testing.T, path string, first string, second string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	content := string(data)
+	require.Equal(t, 1, strings.Count(content, first), "first fixture marker must be exact")
+	require.Equal(t, 1, strings.Count(content, second), "second fixture marker must be exact")
+	const placeholder = "__RELEASE_POLICY_SWAP_MARKER__"
+	require.NotContains(t, content, placeholder)
+	content = strings.Replace(content, first, placeholder, 1)
+	content = strings.Replace(content, second, first, 1)
+	content = strings.Replace(content, placeholder, second, 1)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 }

@@ -228,10 +228,9 @@ func validateOCIRelease(oci OCIRelease) error {
 	if !ociDigestPattern.MatchString(oci.Digest) {
 		return errors.New("OCI digest must be an exact sha256 digest")
 	}
-	expectedPrefix := CanonicalOCIRepo + "@sha256:"
-	if !strings.HasPrefix(oci.ImageSBOMReference, expectedPrefix) ||
-		!ociDigestPattern.MatchString(strings.TrimPrefix(oci.ImageSBOMReference, CanonicalOCIRepo+"@")) {
-		return errors.New("image SBOM reference must be an exact fork OCI digest")
+	expectedReference := CanonicalOCIRepo + "@" + oci.Digest
+	if oci.ImageSBOMReference != expectedReference {
+		return errors.New("image SBOM reference must bind the same exact image digest")
 	}
 	if !sha256Pattern.MatchString(oci.ImageSBOMAttestationSHA256) {
 		return errors.New("image SBOM attestation digest must be lowercase SHA-256")
