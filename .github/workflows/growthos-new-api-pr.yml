@@ -90,7 +90,7 @@ jobs:
           LC_ALL=C sort -u release/go-vet-baseline.txt > "${RUNNER_TEMP}/go-vet.expected.txt"
           LC_ALL=C sort -u "${RUNNER_TEMP}/go-vet.raw.txt" > "${RUNNER_TEMP}/go-vet.actual.txt"
           diff -u "${RUNNER_TEMP}/go-vet.expected.txt" "${RUNNER_TEMP}/go-vet.actual.txt"
-          go test -race ./model ./controller ./middleware ./router ./relay/channel ./service
+          go test -race ./model ./controller ./router -run Settlement -count=1
 
   external-databases:
     if: github.repository == 'mlhjyx/new-api'

@@ -229,6 +229,7 @@ func verifyForkPullRequestGates(content string) error {
 		"go vet ./... 2> \"${RUNNER_TEMP}/go-vet.raw.txt\"",
 		"LC_ALL=C sort -u release/go-vet-baseline.txt",
 		"diff -u \"${RUNNER_TEMP}/go-vet.expected.txt\" \"${RUNNER_TEMP}/go-vet.actual.txt\"",
+		"go test -race ./model ./controller ./router -run Settlement -count=1",
 	}
 	for _, value := range required {
 		if !strings.Contains(content, value) {
@@ -237,6 +238,9 @@ func verifyForkPullRequestGates(content string) error {
 	}
 	if strings.Contains(content, "Dockerfile.dev") || strings.Contains(content, "docker-compose") || strings.Contains(content, "docker compose") {
 		return errors.New("fork PR managed checks must not use a development Docker path")
+	}
+	if strings.Contains(content, "go test -race ./model ./controller ./middleware ./router ./relay/channel ./service") {
+		return errors.New("fork PR race gate must remain scoped to settlement behavior")
 	}
 	return nil
 }

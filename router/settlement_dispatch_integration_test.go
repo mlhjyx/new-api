@@ -21,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -706,6 +707,9 @@ func newSettlementDispatchIntegrationHarness(t *testing.T, name string, upstream
 	ratio_setting.InitRatioSettings()
 	service.InitHttpClient()
 	t.Cleanup(func() {
+		require.Eventually(t, func() bool {
+			return gopool.WorkerCount() == 0
+		}, 5*time.Second, time.Millisecond, "settlement request workers must finish before global runtime state is restored")
 		sqlDB, _ := db.DB()
 		_ = sqlDB.Close()
 		model.DB, model.LOG_DB = originalDB, originalLogDB

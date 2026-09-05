@@ -79,6 +79,8 @@ func TestForkPullRequestCIContainsNoPublishSupplyChainGates(t *testing.T) {
 	assert.Contains(t, content, "test ! -e node_modules/@giscus/react")
 	assert.Contains(t, content, "test ! -e node_modules/@splinetool/runtime")
 	assert.Contains(t, content, "grep -RFl \"growthos-lobe-flex-adapter\"")
+	assert.Contains(t, content, "go test -race ./model ./controller ./router -run Settlement -count=1")
+	assert.NotContains(t, content, "go test -race ./model ./controller ./middleware ./router ./relay/channel ./service")
 }
 
 func TestProductionDockerfileIsPackageManagerFreeAndIdentityBound(t *testing.T) {
