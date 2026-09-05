@@ -219,7 +219,7 @@ func TestFinalizeReleaseReceiptAcceptsOnlyExactForkDigestAndAttestation(t *testi
 	receipt, err := FinalizeReleaseReceipt(source, OCIRelease{
 		Repository:                 "ghcr.io/mlhjyx/new-api",
 		Digest:                     imageDigest,
-		ImageSBOMReference:         "ghcr.io/mlhjyx/new-api@" + imageSBOMDigest,
+		ImageSBOMReference:         "ghcr.io/mlhjyx/new-api@" + imageDigest,
 		ImageSBOMAttestationSHA256: strings.Repeat("3", 64),
 	})
 	require.NoError(t, err)
@@ -242,6 +242,50 @@ func TestFinalizeReleaseReceiptAcceptsOnlyExactForkDigestAndAttestation(t *testi
 		_, err := FinalizeReleaseReceipt(source, input)
 		assert.Error(t, err)
 	}
+}
+
+func TestOCIReleaseRejectsAnImageSBOMReferenceForAnotherDigestAtEveryBoundary(t *testing.T) {
+	source := validSourceProvenanceFixture()
+	imageDigest := "sha256:" + strings.Repeat("1", 64)
+	otherDigest := "sha256:" + strings.Repeat("2", 64)
+	mismatchedOCI := OCIRelease{
+		Repository:                 CanonicalOCIRepo,
+		Digest:                     imageDigest,
+		ImageSBOMReference:         CanonicalOCIRepo + "@" + otherDigest,
+		ImageSBOMAttestationSHA256: strings.Repeat("3", 64),
+	}
+
+	_, err := FinalizeReleaseReceipt(source, mismatchedOCI)
+	assert.ErrorContains(t, err, "same exact image digest")
+
+	mismatchedReceipt := ReleaseReceipt{
+		SchemaVersion: "new-api-release-receipt/v1",
+		Source:        source,
+		OCI:           mismatchedOCI,
+	}
+	_, err = MarshalReleaseReceipt(mismatchedReceipt)
+	assert.ErrorContains(t, err, "same exact image digest")
+
+	validReceipt, err := FinalizeReleaseReceipt(source, OCIRelease{
+		Repository:                 CanonicalOCIRepo,
+		Digest:                     imageDigest,
+		ImageSBOMReference:         CanonicalOCIRepo + "@" + imageDigest,
+		ImageSBOMAttestationSHA256: strings.Repeat("3", 64),
+	})
+	require.NoError(t, err)
+	encoded, err := MarshalReleaseReceipt(validReceipt)
+	require.NoError(t, err)
+	encoded = bytes.Replace(
+		encoded,
+		[]byte(CanonicalOCIRepo+"@"+imageDigest),
+		[]byte(CanonicalOCIRepo+"@"+otherDigest),
+		1,
+	)
+	_, err = DecodeReleaseReceipt(encoded)
+	assert.ErrorContains(t, err, "same exact image digest")
+
+	err = VerifyReleaseReceipt(context.Background(), ".", mismatchedReceipt, "unused-source-sbom")
+	assert.ErrorContains(t, err, "same exact image digest")
 }
 
 func validSourceProvenanceFixture() SourceProvenance {

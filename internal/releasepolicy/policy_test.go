@@ -186,6 +186,52 @@ func TestPolicyNeverAllowsALicenseHoldInRelease(t *testing.T) {
 	assert.ErrorContains(t, err, "license HOLD")
 }
 
+func TestForkReleasePublishesAndVerifiesSourceBeforePublishingTheImage(t *testing.T) {
+	workflow, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "growthos-new-api-release.yml"))
+	require.NoError(t, err)
+	content := string(workflow)
+
+	preflightIndex := strings.Index(content, "Preflight immutable publication targets")
+	sourceIndex := strings.Index(content, "Publish immutable corresponding source")
+	publicReadbackIndex := strings.Index(content, "Verify public corresponding source digest")
+	imageIndex := strings.Index(content, "Build and publish one exact image")
+	imageEvidenceIndex := strings.Index(content, "Append immutable image evidence")
+
+	require.GreaterOrEqual(t, preflightIndex, 0)
+	require.Greater(t, sourceIndex, preflightIndex)
+	require.Greater(t, publicReadbackIndex, sourceIndex)
+	require.Greater(t, imageIndex, publicReadbackIndex)
+	require.Greater(t, imageEvidenceIndex, imageIndex)
+	assert.NotContains(t, content, "--clobber")
+}
+
+func TestForkReleasePreflightsBothImmutableTargetsWithoutCollapsingErrorsIntoAbsence(t *testing.T) {
+	workflow, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "growthos-new-api-release.yml"))
+	require.NoError(t, err)
+	content := string(workflow)
+
+	assert.Contains(t, content, "SOURCE_RELEASE_STATUS")
+	assert.Contains(t, content, "IMAGE_MANIFEST_STATUS")
+	assert.Contains(t, content, "MANIFEST_UNKNOWN")
+	assert.Contains(t, content, "unable to prove source release absence")
+	assert.Contains(t, content, "unable to prove image tag absence")
+	assert.NotContains(t, content, "gh release view \"source-${REVISION}\" --repo mlhjyx/new-api >/dev/null 2>&1")
+}
+
+func TestForkReleaseSeparatesSourceAssetsFromLaterImageEvidence(t *testing.T) {
+	workflow, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "growthos-new-api-release.yml"))
+	require.NoError(t, err)
+	content := string(workflow)
+
+	sourceIndex := strings.Index(content, "Publish immutable corresponding source")
+	imageSBOMIndex := strings.Index(content, "Generate final image SBOM")
+	appendIndex := strings.Index(content, "Append immutable image evidence")
+	require.GreaterOrEqual(t, sourceIndex, 0)
+	require.Greater(t, imageSBOMIndex, sourceIndex)
+	require.Greater(t, appendIndex, imageSBOMIndex)
+	assert.Contains(t, content, "gh release upload \"source-${REVISION}\" --repo mlhjyx/new-api")
+}
+
 func TestForkWorkflowRegistrationUsesOnlyTheExactForkAndReleaseBranch(t *testing.T) {
 	repo := copyReleasePolicyFixture(t)
 	registration, err := os.ReadFile(filepath.Join(repo, "release/fork-workflow-registration.md"))
