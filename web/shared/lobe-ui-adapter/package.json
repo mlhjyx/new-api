@@ -1,0 +1,15 @@
+{
+  "name": "@lobehub/ui",
+  "version": "5.0.0",
+  "private": true,
+  "description": "GrowthOS private compatibility adapter for @lobehub/icons",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./index.tsx",
+    "./icons": "./icons.tsx"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "schema_version": "new-api-license-review/v1",
+  "status": "APPROVED",
+  "distribution": "ghcr.io/mlhjyx/new-api OCI image plus public corresponding source",
+  "reviewed_license_expressions": [
+    "0BSD",
+    "AGPL-3.0-only",
+    "Apache-2.0",
+    "Apache-2.0 OR MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "(MPL-2.0 OR Apache-2.0)",
+    "OFL-1.1",
+    "Unlicense"
+  ],
+  "dependency_resolutions": [
+    {
+      "ecosystem": "Go",
+      "name": "github.com/Calcium-Ion/go-epay",
+      "previous_version": "v0.0.4",
+      "resolved_version": "v0.0.5-0.20260612155053-774330a93901",
+      "artifact_integrity": "h1:RsR3YZPHrMvyiPAOIfxIPNEvrIIk1vBZNu/3LmxC/4Q=",
+      "license_expression": "MIT",
+      "license_file_sha256": "86f028deb5895d8994571a0393face710851c29bb938e9b23fe7a9828efd99a8",
+      "bundle_reachability": "runtime-linked",
+      "decision": "UPGRADED_TO_EXACT_LICENSED_COMMIT",
+      "evidence_uri": "https://github.com/Calcium-Ion/go-epay/blob/774330a939012a2baab5776e890456d5f15d586e/LICENSE"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@giscus/react",
+      "previous_version": "3.1.0",
+      "resolved_version": "NOT_PRESENT",
+      "artifact_integrity": "sha512-0TCO2TvL43+oOdyVVGHDItwxD1UMKP2ZYpT6gXmhFOqfAJtZxTzJ9hkn34iAF/b6YzyJ4Um89QIt9z/ajmAEeg==",
+      "license_expression": "NOASSERTION",
+      "license_file_sha256": "",
+      "bundle_reachability": "absent-from-lock-install-and-frozen-bundles",
+      "decision": "REMOVED_BY_PRIVATE_LOCAL_ADAPTER",
+      "evidence_uri": "https://registry.npmjs.org/@giscus/react/3.1.0"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@splinetool/runtime",
+      "previous_version": "0.9.526",
+      "resolved_version": "NOT_PRESENT",
+      "artifact_integrity": "sha512-qznHbXA5aKwDbCgESAothCNm1IeEZcmNWG145p5aXj4w5uoqR1TZ9qkTHTKLTsUbHeitCwdhzmRqan1kxboLgQ==",
+      "license_expression": "NOASSERTION",
+      "license_file_sha256": "",
+      "bundle_reachability": "absent-from-lock-install-and-frozen-bundles",
+      "decision": "REMOVED_BY_PRIVATE_LOCAL_ADAPTER",
+      "evidence_uri": "https://registry.npmjs.org/@splinetool/runtime/0.9.526"
+    },
+    {
+      "ecosystem": "local",
+      "name": "@lobehub/ui",
+      "previous_version": "5.15.6",
+      "resolved_version": "workspace:shared/lobe-ui-adapter@5.0.0",
+      "artifact_integrity": "sha256:beba0d5f7daa8ae401d665603edfa67db08ea95f999ac856d619375bb012ef61",
+      "license_expression": "AGPL-3.0-only",
+      "license_file_sha256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
+      "bundle_reachability": "runtime-bundled-five-primitive-compatibility-surface",
+      "decision": "REPLACED_WITH_PRIVATE_NON_PUBLISHABLE_ADAPTER",
+      "evidence_uri": "https://www.gnu.org/licenses/agpl-3.0.txt"
+    }
+  ],
+  "evidence": {
+    "go_mod_sha256": "f540edb3de9f42779a9b7d6f3b8794a8a4e625b62fda6b8df1fc4023df19f2f4",
+    "go_sum_sha256": "d69cbbb1b9e9aeec3267e2e8628dbdff04b5858129af7e1445004a64f595c74a",
+    "bun_lock_sha256": "1659c6c64ee20dee0cc15a72d8a7875f0fc56d208d8148b16372962e3f2f7ee4",
+    "electron_lock_sha256": "a1277a240478c937774cf09e7f7f92b628c829043adb5891b63f4d0300499975",
+    "adapter_sha256": "beba0d5f7daa8ae401d665603edfa67db08ea95f999ac856d619375bb012ef61",
+    "license_sha256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
+    "upstream_notice_sha256": "528067fcdf4f9d7e3fdb489d02cbdd36a0efa63fc2eb1686340612c26beb9f33"
+  },
+  "unresolved": []
+}

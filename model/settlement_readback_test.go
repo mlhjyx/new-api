@@ -1,0 +1,409 @@
+package model
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+)
+
+func TestNewSettlementReadbackCredentialStoresOnlyDerivedSecretMaterial(t *testing.T) {
+	credential, secret, err := NewSettlementReadbackCredential(42, "pepper-v1", "test-pepper")
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(secret), settlementReadbackSecretBytes)
+	require.Equal(t, 42, credential.DispatchTokenId)
+	require.Equal(t, SettlementReadbackCredentialActive, credential.Status)
+	require.Equal(t, "pepper-v1", credential.PepperVersion)
+	require.NotEmpty(t, credential.LookupPrefix)
+	require.Len(t, credential.SecretDigest, settlementReadbackDigestHexLength)
+	assert.NotContains(t, credential.LookupPrefix, secret)
+	assert.NotContains(t, credential.SecretDigest, secret)
+	assert.True(t, credential.MatchesSecret(secret, "test-pepper"))
+	assert.False(t, credential.MatchesSecret(secret, "wrong-pepper"))
+}
+
+func TestSettlementReadbackCredentialPartsRequireExactRawBase64URLSecret(t *testing.T) {
+
+	_, secret, err := NewSettlementReadbackCredential(42, "pepper-v1", "test-pepper")
+	require.NoError(t, err)
+	_, ok := settlementReadbackCredentialParts(secret)
+	assert.True(t, ok)
+	for _, invalid := range []string{
+		"srb1.abcdefghijklmnop.short",
+		"srb1.abcdefghijklmnop.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+		"srb1.abcdefghijklmnop.!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+		"srb1.abcdefghijklmnop.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	} {
+		_, ok := settlementReadbackCredentialParts(invalid)
+		assert.False(t, ok, invalid)
+	}
+}
+
+func TestSettlementReadbackCapabilityRequiresTransactionalRelationalLogTopology(t *testing.T) {
+	originalDB := DB
+	originalLogDB := LOG_DB
+	originalMainType := common.MainDatabaseType()
+	originalLogType := common.LogDatabaseType()
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	t.Cleanup(func() {
+		DB = originalDB
+		LOG_DB = originalLogDB
+		common.SetMainDatabaseType(originalMainType)
+		common.SetLogDatabaseType(originalLogType)
+		common.LogConsumeEnabled = originalLogConsumeEnabled
+	})
+
+	common.LogConsumeEnabled = true
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	common.SetLogDatabaseType(common.DatabaseTypeSQLite)
+	DB = nil
+	LOG_DB = nil
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady())
+
+	common.LogConsumeEnabled = false
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady())
+}
+
+func TestSettlementReadbackBindingAllowsSameDigestForDifferentDispatchTokens(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-composite?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&SettlementReadbackBinding{}))
+	requestDigest := strings.Repeat("a", settlementReadbackDigestHexLength)
+	nonceDigest := strings.Repeat("b", settlementReadbackDigestHexLength)
+	first := &SettlementReadbackBinding{DispatchTokenId: 1, SettlementRequestIdSha256: requestDigest, SettlementNonceSha256: nonceDigest, GatewayRequestId: "gateway-1", State: SettlementReadbackBindingBound, CreatedAt: 1}
+	second := &SettlementReadbackBinding{DispatchTokenId: 2, SettlementRequestIdSha256: requestDigest, SettlementNonceSha256: nonceDigest, GatewayRequestId: "gateway-2", State: SettlementReadbackBindingBound, CreatedAt: 1}
+	require.NoError(t, db.Create(first).Error)
+	require.NoError(t, db.Create(second).Error)
+	duplicate := &SettlementReadbackBinding{DispatchTokenId: 1, SettlementRequestIdSha256: requestDigest, SettlementNonceSha256: strings.Repeat("c", settlementReadbackDigestHexLength), GatewayRequestId: "gateway-3", State: SettlementReadbackBindingBound, CreatedAt: 1}
+	assert.Error(t, db.Create(duplicate).Error)
+}
+
+func TestSettlementReadbackBindingCasAndExactLinkedLog(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-link?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&SettlementReadbackBinding{}, &Log{}))
+	binding := &SettlementReadbackBinding{DispatchTokenId: 9, SettlementRequestIdSha256: strings.Repeat("d", settlementReadbackDigestHexLength), SettlementNonceSha256: strings.Repeat("e", settlementReadbackDigestHexLength), GatewayRequestId: "gateway", State: SettlementReadbackBindingBound, CreatedAt: 1}
+	require.NoError(t, db.Create(binding).Error)
+	assert.True(t, BeginSettlementReadbackDispatch(db, binding.Id))
+	assert.False(t, BeginSettlementReadbackDispatch(db, binding.Id))
+	log := &Log{Type: LogTypeConsume, TokenId: 9, SettlementBindingId: &binding.Id, CreatedAt: 2}
+	require.NoError(t, LinkSettlementReadbackConsumeLog(db, binding.Id, log))
+	receipt, pending, err := FindSettlementReadbackConsumeLog(db, 9, binding.SettlementRequestIdSha256, binding.SettlementNonceSha256)
+	require.NoError(t, err)
+	assert.False(t, pending)
+	require.NotNil(t, receipt)
+	assert.Equal(t, binding.Id, *receipt.SettlementBindingId)
+}
+
+func TestSettlementReadbackPepperKeyringIsVersionedAndClosed(t *testing.T) {
+	keyring, err := ParseSettlementReadbackPepperKeyring([]byte(strings.Join([]string{
+		"schema=settlement-readback-pepper-keyring/v1",
+		"pepper-v2 ACTIVE AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"pepper-v1 VERIFY_ONLY BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+		"",
+	}, "\n")))
+	require.NoError(t, err)
+	version, pepper, ok := keyring.Active()
+	assert.True(t, ok)
+	assert.Equal(t, "pepper-v2", version)
+	assert.Len(t, pepper, settlementReadbackSecretBytes)
+	_, oldPepper, ok := keyring.Lookup("pepper-v1")
+	assert.True(t, ok)
+	assert.Len(t, oldPepper, settlementReadbackSecretBytes)
+
+	for name, raw := range map[string]string{
+		"duplicate version": "schema=settlement-readback-pepper-keyring/v1\npepper-v1 ACTIVE AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\npepper-v1 VERIFY_ONLY BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n",
+		"two active":        "schema=settlement-readback-pepper-keyring/v1\npepper-v1 ACTIVE AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\npepper-v2 ACTIVE BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n",
+		"invalid secret":    "schema=settlement-readback-pepper-keyring/v1\npepper-v1 ACTIVE padded=====================================\n",
+		"unknown status":    "schema=settlement-readback-pepper-keyring/v1\npepper-v1 RETIRED AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseSettlementReadbackPepperKeyring([]byte(raw))
+			assert.Error(t, err)
+		})
+	}
+}
+
+func TestSettlementReadbackCredentialLifecycleEnforcesRotationAndRevocation(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-lifecycle?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&Token{}, &SettlementReadbackCredential{}, &SettlementReadbackBinding{}))
+	require.NoError(t, db.Create(&Token{Id: 42, UserId: 7, Key: "lifecycle-test-token", Status: common.TokenStatusEnabled}).Error)
+	keyring, err := ParseSettlementReadbackPepperKeyring([]byte(strings.Join([]string{
+		"schema=settlement-readback-pepper-keyring/v1",
+		"pepper-v2 ACTIVE AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"pepper-v1 VERIFY_ONLY BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+		"",
+	}, "\n")))
+	require.NoError(t, err)
+	const now int64 = 2_000_000_000
+
+	first, firstSecret, err := CreateSettlementReadbackCredential(db, 42, keyring, now)
+	require.NoError(t, err)
+	assert.NotEmpty(t, firstSecret)
+	assert.Equal(t, "pepper-v2", first.PepperVersion)
+	_, _, err = CreateSettlementReadbackCredential(db, 42, keyring, now)
+	assert.Error(t, err)
+
+	second, secondSecret, err := RotateSettlementReadbackCredential(db, first.Id, 300, keyring, now+1)
+	require.NoError(t, err)
+	assert.NotEmpty(t, secondSecret)
+	assert.NotEqual(t, firstSecret, secondSecret)
+	require.NoError(t, db.First(first, first.Id).Error)
+	assert.True(t, SettlementReadbackCredentialUsableAt(first, now+300))
+	assert.False(t, SettlementReadbackCredentialUsableAt(first, now+301))
+	_, _, err = RotateSettlementReadbackCredential(db, second.Id, 300, keyring, now+2)
+	assert.Error(t, err, "a dispatch token may have at most two overlapping readers")
+
+	replayed, err := RevokeSettlementReadbackCredential(db, second.Id, now+3)
+	require.NoError(t, err)
+	assert.False(t, replayed)
+	replayed, err = RevokeSettlementReadbackCredential(db, second.Id, now+4)
+	require.NoError(t, err)
+	assert.True(t, replayed)
+	var stored SettlementReadbackCredential
+	require.NoError(t, db.First(&stored, second.Id).Error)
+	assert.Equal(t, SettlementReadbackCredentialRevoked, stored.Status)
+	assert.Equal(t, now+3, stored.RevokedAt)
+}
+
+func TestSettlementReadbackEnrollmentWithoutUsableReaderFailsClosed(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-enrollment?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&SettlementReadbackCredential{}))
+	originalDB := DB
+	DB = db
+	t.Cleanup(func() { DB = originalDB })
+
+	now := time.Now().Unix()
+	require.NoError(t, db.Create(&SettlementReadbackCredential{
+		LookupPrefix:    "expiredreader001",
+		SecretDigest:    strings.Repeat("a", 64),
+		PepperVersion:   "pepper-v1",
+		DispatchTokenId: 42,
+		Status:          SettlementReadbackCredentialActive,
+		CreatedAt:       now - 600,
+		RotationEndsAt:  now - 1,
+	}).Error)
+	require.NoError(t, db.Create(&SettlementReadbackCredential{
+		LookupPrefix:    "revokedreader001",
+		SecretDigest:    strings.Repeat("b", 64),
+		PepperVersion:   "pepper-v1",
+		DispatchTokenId: 42,
+		Status:          SettlementReadbackCredentialRevoked,
+		CreatedAt:       now - 300,
+		RevokedAt:       now - 10,
+	}).Error)
+	require.NoError(t, db.Create(&SettlementReadbackCredential{
+		LookupPrefix:    "usablereader0001",
+		SecretDigest:    strings.Repeat("c", 64),
+		PepperVersion:   "pepper-v1",
+		DispatchTokenId: 43,
+		Status:          SettlementReadbackCredentialActive,
+		CreatedAt:       now,
+	}).Error)
+
+	bound, err := HasActiveSettlementReadbackCredential(42)
+	assert.False(t, bound)
+	assert.Error(t, err, "an enrolled token without a usable reader must not fall back to legacy dispatch")
+
+	bound, err = HasActiveSettlementReadbackCredential(43)
+	assert.True(t, bound)
+	assert.NoError(t, err)
+
+	bound, err = HasActiveSettlementReadbackCredential(44)
+	assert.False(t, bound)
+	assert.NoError(t, err, "a token with no credential history remains an ordinary legacy token")
+}
+
+func TestLoadSettlementReadbackPepperKeyringRequiresPrivateRegularFile(t *testing.T) {
+	raw := []byte("schema=settlement-readback-pepper-keyring/v1\npepper-v1 ACTIVE AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n")
+	directory := t.TempDir()
+	path := filepath.Join(directory, "keyring")
+	require.NoError(t, os.WriteFile(path, raw, 0o600))
+	keyring, err := LoadSettlementReadbackPepperKeyring(path)
+	require.NoError(t, err)
+	version, _, ok := keyring.Active()
+	assert.True(t, ok)
+	assert.Equal(t, "pepper-v1", version)
+
+	require.NoError(t, os.Chmod(path, 0o644))
+	_, err = LoadSettlementReadbackPepperKeyring(path)
+	assert.Error(t, err)
+	require.NoError(t, os.Chmod(path, 0o600))
+	symlink := filepath.Join(directory, "keyring-link")
+	require.NoError(t, os.Symlink(path, symlink))
+	_, err = LoadSettlementReadbackPepperKeyring(symlink)
+	assert.Error(t, err)
+}
+
+func TestSettlementReadbackCapabilityRequiresExactSharedSchema(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-schema?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	originalDB, originalLogDB := DB, LOG_DB
+	originalMainType, originalLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	originalConsume := common.LogConsumeEnabled
+	t.Cleanup(func() {
+		DB, LOG_DB = originalDB, originalLogDB
+		common.SetMainDatabaseType(originalMainType)
+		common.SetLogDatabaseType(originalLogType)
+		common.LogConsumeEnabled = originalConsume
+	})
+	DB, LOG_DB = db, db
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	common.SetLogDatabaseType(common.DatabaseTypeSQLite)
+	common.LogConsumeEnabled = true
+
+	require.NoError(t, db.AutoMigrate(&Token{}, &Log{}))
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady())
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	var foreignKeys int
+	require.NoError(t, db.Raw("PRAGMA foreign_keys").Scan(&foreignKeys).Error)
+	assert.Equal(t, 1, foreignKeys)
+	assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+
+	require.NoError(t, db.Migrator().DropIndex(&Log{}, "idx_logs_settlement_binding_id"))
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady())
+}
+
+func TestSeparateRelationalLogMigrationDoesNotCreateSettlementRelation(t *testing.T) {
+	mainDB, err := gorm.Open(sqlite.Open("file:settlement-readback-main?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	logDB, err := gorm.Open(sqlite.Open("file:settlement-readback-log?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	originalDB, originalLogDB := DB, LOG_DB
+	originalMainType, originalLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	t.Cleanup(func() {
+		DB, LOG_DB = originalDB, originalLogDB
+		common.SetMainDatabaseType(originalMainType)
+		common.SetLogDatabaseType(originalLogType)
+	})
+	DB, LOG_DB = mainDB, logDB
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	common.SetLogDatabaseType(common.DatabaseTypeSQLite)
+	require.NoError(t, migrateLOGDB())
+	assert.True(t, logDB.Migrator().HasTable(&Log{}))
+	assert.False(t, logDB.Migrator().HasColumn(&Log{}, "SettlementBindingId"))
+	assert.False(t, logDB.Migrator().HasTable(&SettlementReadbackBinding{}))
+}
+
+func TestSettlementReadbackLogLinkFailureRollsBackWithoutChoosingAnotherLog(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-rollback?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	binding := &SettlementReadbackBinding{DispatchTokenId: 9, SettlementRequestIdSha256: strings.Repeat("1", 64), SettlementNonceSha256: strings.Repeat("2", 64), GatewayRequestId: "gateway", State: SettlementReadbackBindingBound, CreatedAt: 1}
+	require.NoError(t, db.Create(binding).Error)
+	require.True(t, BeginSettlementReadbackDispatch(db, binding.Id))
+
+	wrong := &Log{Type: LogTypeConsume, TokenId: 10, SettlementBindingId: &binding.Id, CreatedAt: 2}
+	assert.Error(t, LinkSettlementReadbackConsumeLog(db, binding.Id, wrong))
+	var stored SettlementReadbackBinding
+	require.NoError(t, db.First(&stored, binding.Id).Error)
+	assert.Equal(t, SettlementReadbackBindingDispatchStarted, stored.State)
+	var count int64
+	require.NoError(t, db.Model(&Log{}).Where("settlement_binding_id = ?", binding.Id).Count(&count).Error)
+	assert.Zero(t, count)
+
+	valid := &Log{Type: LogTypeConsume, TokenId: 9, SettlementBindingId: &binding.Id, CreatedAt: 3}
+	require.NoError(t, LinkSettlementReadbackConsumeLog(db, binding.Id, valid))
+	duplicate := &Log{Type: LogTypeConsume, TokenId: 9, SettlementBindingId: &binding.Id, CreatedAt: 4}
+	assert.Error(t, LinkSettlementReadbackConsumeLog(db, binding.Id, duplicate))
+	require.NoError(t, db.Model(&Log{}).Where("settlement_binding_id = ?", binding.Id).Count(&count).Error)
+	assert.EqualValues(t, 1, count)
+
+	missingBindingID := binding.Id + 10_000
+	orphan := &Log{Type: LogTypeConsume, TokenId: 9, SettlementBindingId: &missingBindingID, CreatedAt: 5}
+	assert.Error(t, db.Create(orphan).Error)
+}
+
+func TestSettlementReadbackLogLinkRollsBackWhenFinalStateCasLoses(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-state-cas?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	binding := &SettlementReadbackBinding{DispatchTokenId: 9, SettlementRequestIdSha256: strings.Repeat("3", 64), SettlementNonceSha256: strings.Repeat("4", 64), GatewayRequestId: "gateway", State: SettlementReadbackBindingBound, CreatedAt: 1}
+	require.NoError(t, db.Create(binding).Error)
+	require.True(t, BeginSettlementReadbackDispatch(db, binding.Id))
+	require.NoError(t, db.Exec(`CREATE TRIGGER settlement_test_state_drift
+      AFTER INSERT ON logs
+      WHEN NEW.settlement_binding_id IS NOT NULL
+      BEGIN
+        UPDATE settlement_readback_bindings SET state = 'BOUND' WHERE id = NEW.settlement_binding_id;
+      END`).Error)
+
+	log := &Log{Type: LogTypeConsume, TokenId: 9, SettlementBindingId: &binding.Id, CreatedAt: 2}
+	err = LinkSettlementReadbackConsumeLog(db, binding.Id, log)
+	assert.Error(t, err)
+	assert.True(t, IsSettlementReadbackIntegrityError(err))
+	var count int64
+	require.NoError(t, db.Model(&Log{}).Where("settlement_binding_id = ?", binding.Id).Count(&count).Error)
+	assert.Zero(t, count)
+	var stored SettlementReadbackBinding
+	require.NoError(t, db.First(&stored, binding.Id).Error)
+	assert.Equal(t, SettlementReadbackBindingDispatchStarted, stored.State)
+}
+
+func TestCreateSettlementReadbackBindingIsExactAndPreDispatchIdempotent(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settlement-readback-prebind?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	require.NoError(t, db.AutoMigrate(&Token{}))
+	require.NoError(t, db.Create(&Token{Id: 42, UserId: 7, Key: "prebind-token", Status: common.TokenStatusEnabled}).Error)
+	requestDigest := strings.Repeat("5", 64)
+	nonceDigest := strings.Repeat("6", 64)
+	binding, replay, err := CreateOrGetSettlementReadbackBinding(db, 42, requestDigest, nonceDigest, "gateway-request")
+	require.NoError(t, err)
+	assert.False(t, replay)
+	require.NotNil(t, binding)
+	assert.Equal(t, SettlementReadbackBindingBound, binding.State)
+
+	recovered, replay, err := CreateOrGetSettlementReadbackBinding(db, 42, requestDigest, nonceDigest, "gateway-request")
+	require.NoError(t, err)
+	assert.True(t, replay)
+	assert.Equal(t, binding.Id, recovered.Id)
+	_, _, err = CreateOrGetSettlementReadbackBinding(db, 42, requestDigest, strings.Repeat("7", 64), "gateway-request")
+	assert.Error(t, err)
+	_, _, err = CreateOrGetSettlementReadbackBinding(db, 42, strings.Repeat("8", 64), nonceDigest, "gateway-request")
+	assert.Error(t, err)
+
+	require.True(t, BeginSettlementReadbackDispatch(db, binding.Id))
+	_, _, err = CreateOrGetSettlementReadbackBinding(db, 42, requestDigest, nonceDigest, "gateway-request")
+	assert.Error(t, err, "a started physical wire can only use readback")
+}
+
+func TestRecordConsumeLogLinksTheFrozenSettlementBinding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open("file:settlement-record-consume?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	originalDB, originalLogDB := DB, LOG_DB
+	originalConsume, originalExport := common.LogConsumeEnabled, common.DataExportEnabled
+	DB, LOG_DB = db, db
+	common.LogConsumeEnabled = true
+	common.DataExportEnabled = false
+	t.Cleanup(func() {
+		DB, LOG_DB = originalDB, originalLogDB
+		common.LogConsumeEnabled, common.DataExportEnabled = originalConsume, originalExport
+	})
+	binding := &SettlementReadbackBinding{DispatchTokenId: 42, SettlementRequestIdSha256: strings.Repeat("9", 64), SettlementNonceSha256: strings.Repeat("a", 64), GatewayRequestId: "gateway-request", State: SettlementReadbackBindingDispatchStarted, CreatedAt: 1}
+	require.NoError(t, db.Create(binding).Error)
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	require.NoError(t, RecordConsumeLog(context, 7, RecordConsumeLogParams{ChannelId: 3, PromptTokens: 10, CompletionTokens: 2, ModelName: "model-v1", TokenName: "redacted", Quota: 12, TokenId: 42, Other: map[string]interface{}{"usage_semantic": "anthropic", "cache_creation_tokens": 0, "cache_tokens": 0}, SettlementBindingId: binding.Id}))
+	var stored SettlementReadbackBinding
+	require.NoError(t, db.First(&stored, binding.Id).Error)
+	assert.Equal(t, SettlementReadbackBindingLogLinked, stored.State)
+	var logs []Log
+	require.NoError(t, db.Where("settlement_binding_id = ?", binding.Id).Find(&logs).Error)
+	require.Len(t, logs, 1)
+	assert.Equal(t, LogTypeConsume, logs[0].Type)
+}

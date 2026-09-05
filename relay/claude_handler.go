@@ -45,6 +45,10 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
+	dispatchPlan := service.FreezeChatCompletionsDispatchPlan(info)
+	if fenceError := requireSettlementDispatchFence(c, info, adaptor); fenceError != nil {
+		return fenceError
+	}
 	adaptor.Init(info)
 
 	if request.MaxTokens == nil || *request.MaxTokens == 0 {
@@ -132,9 +136,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 	}
 
-	if !model_setting.GetGlobalSettings().PassThroughRequestEnabled &&
-		!info.ChannelSetting.PassThroughBodyEnabled &&
-		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
+	if dispatchPlan == service.ChatCompletionsDispatchResponses {
 		result, convErr := service.ConvertRequest(c, info, types.RelayFormatOpenAI, request)
 		if convErr != nil {
 			return types.NewError(convErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
@@ -148,8 +150,13 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		if newApiErr != nil {
 			return newApiErr
 		}
+		if completionError := service.SettlementStreamCompletionError(info); completionError != nil {
+			return completionError
+		}
 
-		service.PostTextConsumeQuota(c, info, usage, nil)
+		if persistenceError := service.PostTextConsumeQuota(c, info, usage, nil); persistenceError != nil {
+			return persistenceError
+		}
 		return nil
 	}
 
@@ -221,7 +228,12 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
 	}
+	if completionError := service.SettlementStreamCompletionError(info); completionError != nil {
+		return completionError
+	}
 
-	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
+	if persistenceError := service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil); persistenceError != nil {
+		return persistenceError
+	}
 	return nil
 }

@@ -1,0 +1,240 @@
+package model
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+)
+
+func TestLegacySettlementReadbackFixtureCoversExactBaseLogManifest(t *testing.T) {
+	db, err := openSettlementReadbackSQLite("legacy-fixture-manifest")
+	require.NoError(t, err)
+	createSettlementReadbackLegacyLogFixture(t, db, common.DatabaseTypeSQLite)
+}
+
+func TestSettlementReadbackSQLiteEnablesForeignKeysOnEveryPooledConnection(t *testing.T) {
+	originalPath := common.SQLitePath
+	t.Cleanup(func() { common.SQLitePath = originalPath })
+
+	common.SQLitePath = filepath.Join(t.TempDir(), "settlement-readback.db") + "?_busy_timeout=30000"
+	t.Setenv("SQL_DSN", "local")
+	db, databaseType, err := chooseDB("SQL_DSN", false)
+	require.NoError(t, err)
+	require.Equal(t, common.DatabaseTypeSQLite, databaseType)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	sqlDB.SetMaxOpenConns(4)
+	sqlDB.SetMaxIdleConns(4)
+
+	connections := make([]*sql.Conn, 0, 4)
+	for index := 0; index < 4; index++ {
+		connection, err := sqlDB.Conn(context.Background())
+		require.NoError(t, err)
+		connections = append(connections, connection)
+	}
+	t.Cleanup(func() {
+		for _, connection := range connections {
+			require.NoError(t, connection.Close())
+		}
+	})
+
+	for index, connection := range connections {
+		var enabled int
+		require.NoError(t, connection.QueryRowContext(context.Background(), "PRAGMA foreign_keys").Scan(&enabled))
+		assert.Equalf(t, 1, enabled, "pooled sqlite connection %d must enforce foreign keys", index)
+	}
+}
+
+func TestSettlementReadbackMigrationPreservesPopulatedLegacyLogs(t *testing.T) {
+	db, err := openSettlementReadbackSQLite("legacy-forward-upgrade")
+	require.NoError(t, err)
+	assertSettlementReadbackLegacyMigration(t, db, common.DatabaseTypeSQLite)
+}
+
+func TestSettlementReadbackReadinessRejectsNonUniqueContractIndexes(t *testing.T) {
+	tests := []struct {
+		name        string
+		dropModel   any
+		indexName   string
+		replacement string
+	}{
+		{
+			name:        "reader lookup prefix",
+			dropModel:   &SettlementReadbackCredential{},
+			indexName:   "idx_settlement_readback_credentials_lookup_prefix",
+			replacement: "CREATE INDEX idx_settlement_readback_credentials_lookup_prefix ON settlement_readback_credentials(lookup_prefix)",
+		},
+		{
+			name:        "token request digest",
+			dropModel:   &SettlementReadbackBinding{},
+			indexName:   "idx_settlement_request",
+			replacement: "CREATE INDEX idx_settlement_request ON settlement_readback_bindings(dispatch_token_id, settlement_request_id_sha256)",
+		},
+		{
+			name:        "token nonce digest",
+			dropModel:   &SettlementReadbackBinding{},
+			indexName:   "idx_settlement_nonce",
+			replacement: "CREATE INDEX idx_settlement_nonce ON settlement_readback_bindings(dispatch_token_id, settlement_nonce_sha256)",
+		},
+		{
+			name:        "linked log",
+			dropModel:   &Log{},
+			indexName:   "idx_logs_settlement_binding_id",
+			replacement: "CREATE INDEX idx_logs_settlement_binding_id ON logs(settlement_binding_id)",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, err := openSettlementReadbackSQLite("nonunique-" + testCase.indexName)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+			restoreSettlementReadbackTestTopology(t, db, common.DatabaseTypeSQLite)
+			assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+
+			require.NoError(t, db.Migrator().DropIndex(testCase.dropModel, testCase.indexName))
+			require.NoError(t, db.Exec(testCase.replacement).Error)
+			assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "a same-name non-unique index must not satisfy the contract")
+		})
+	}
+}
+
+func TestSettlementReadbackReadinessRejectsPartialUniqueBindingIndex(t *testing.T) {
+	db, err := openSettlementReadbackSQLite("partial-unique-binding-index")
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	restoreSettlementReadbackTestTopology(t, db, common.DatabaseTypeSQLite)
+	assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+
+	require.NoError(t, db.Migrator().DropIndex(&SettlementReadbackBinding{}, "idx_settlement_request"))
+	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX idx_settlement_request
+		ON settlement_readback_bindings(dispatch_token_id, settlement_request_id_sha256)
+		WHERE dispatch_token_id = 999`).Error)
+
+	requestDigest := strings.Repeat("a", 64)
+	require.NoError(t, db.Create(newPhaseDBinding(7, requestDigest, strings.Repeat("b", 64), "gateway-partial-1")).Error)
+	require.NoError(t, db.Create(newPhaseDBinding(7, requestDigest, strings.Repeat("c", 64), "gateway-partial-2")).Error,
+		"the partial index demonstrates that a second physical binding is not database-blocked")
+	assert.False(t, settlementReadbackHasExactUniqueIndex(db, &SettlementReadbackBinding{}, "idx_settlement_request", []string{"dispatch_token_id", "settlement_request_id_sha256"}),
+		"the exact index inspector itself must reject the partial index")
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "a partial unique index must never admit the paid path")
+}
+
+func TestSettlementReadbackReadinessRejectsCredentialColumnDrift(t *testing.T) {
+	tests := []struct {
+		name              string
+		lookupDeclaration string
+	}{
+		{name: "wrong type", lookupDeclaration: "TEXT NOT NULL"},
+		{name: "nullable", lookupDeclaration: "VARCHAR(32)"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, err := openSettlementReadbackSQLite("column-drift-" + strings.ReplaceAll(testCase.name, " ", "-"))
+			require.NoError(t, err)
+			require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+			restoreSettlementReadbackTestTopology(t, db, common.DatabaseTypeSQLite)
+			assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+
+			require.NoError(t, db.Exec("ALTER TABLE settlement_readback_credentials RENAME TO settlement_readback_credentials_old").Error)
+			require.NoError(t, db.Exec(`CREATE TABLE settlement_readback_credentials (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				lookup_prefix `+testCase.lookupDeclaration+`,
+				secret_digest CHAR(64) NOT NULL,
+				pepper_version VARCHAR(64) NOT NULL,
+				dispatch_token_id INTEGER NOT NULL,
+				status INTEGER NOT NULL,
+				created_at BIGINT NOT NULL,
+				revoked_at BIGINT NOT NULL DEFAULT 0,
+				rotation_ends_at BIGINT NOT NULL DEFAULT 0
+			)`).Error)
+			require.NoError(t, db.Exec("DROP TABLE settlement_readback_credentials_old").Error)
+			require.NoError(t, db.Exec("CREATE UNIQUE INDEX idx_settlement_readback_credentials_lookup_prefix ON settlement_readback_credentials(lookup_prefix)").Error)
+
+			assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "wrong type or nullability must not satisfy the contract")
+		})
+	}
+}
+
+func TestSettlementReadbackReadinessRejectsWrongForeignKeyActions(t *testing.T) {
+	db, err := openSettlementReadbackSQLite("foreign-key-action-drift")
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	restoreSettlementReadbackTestTopology(t, db, common.DatabaseTypeSQLite)
+	assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+
+	require.NoError(t, db.Exec("ALTER TABLE logs RENAME TO logs_old").Error)
+	require.NoError(t, db.Exec(`CREATE TABLE logs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		settlement_binding_id INTEGER,
+		CONSTRAINT fk_logs_settlement_binding
+			FOREIGN KEY (settlement_binding_id) REFERENCES settlement_readback_bindings(id)
+			ON UPDATE CASCADE ON DELETE CASCADE
+	)`).Error)
+	require.NoError(t, db.Exec("DROP TABLE logs_old").Error)
+	require.NoError(t, db.Exec("CREATE UNIQUE INDEX idx_logs_settlement_binding_id ON logs(settlement_binding_id)").Error)
+
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "cascade actions must not satisfy the retention contract")
+}
+
+func TestSettlementReadbackReadinessRejectsConfiguredSeparateLogStore(t *testing.T) {
+	db, err := openSettlementReadbackSQLite("configured-separate-log-store")
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	restoreSettlementReadbackTestTopology(t, db, common.DatabaseTypeSQLite)
+	assert.True(t, SettlementReadbackRelationalLogTopologyReady())
+
+	t.Setenv("LOG_SQL_DSN", "local-separate-log-store")
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady(), "an explicit LOG_SQL_DSN is never the shared transactional topology")
+}
+
+func TestSettlementReadbackReadinessRejectsUnsupportedOrDisabledLogTopology(t *testing.T) {
+	db, err := openSettlementReadbackSQLite("unsupported-or-disabled-log-store")
+	require.NoError(t, err)
+	require.NoError(t, EnsureSettlementReadbackSharedSchema(db))
+	restoreSettlementReadbackTestTopology(t, db, common.DatabaseTypeSQLite)
+
+	common.LogConsumeEnabled = false
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady())
+	common.LogConsumeEnabled = true
+
+	common.SetLogDatabaseType(common.DatabaseTypeClickHouse)
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady())
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+
+	separate, err := openSettlementReadbackSQLite("actually-separate-log-store")
+	require.NoError(t, err)
+	LOG_DB = separate
+	assert.False(t, SettlementReadbackRelationalLogTopologyReady())
+}
+
+func restoreSettlementReadbackTestTopology(t *testing.T, db *gorm.DB, databaseType common.DatabaseType) {
+	t.Helper()
+	originalDB, originalLogDB := DB, LOG_DB
+	originalMainType, originalLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	DB, LOG_DB = db, db
+	common.SetDatabaseTypes(databaseType, databaseType)
+	common.LogConsumeEnabled = true
+	t.Cleanup(func() {
+		DB, LOG_DB = originalDB, originalLogDB
+		common.SetDatabaseTypes(originalMainType, originalLogType)
+		common.LogConsumeEnabled = originalLogConsumeEnabled
+	})
+}
+
+func openSettlementReadbackSQLite(name string) (*gorm.DB, error) {
+	path := fmt.Sprintf("file:%s?mode=memory&cache=shared&_pragma=foreign_keys(1)", name)
+	return gorm.Open(sqlite.Open(path), &gorm.Config{})
+}

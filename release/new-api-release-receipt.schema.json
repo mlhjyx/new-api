@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mlhjyx:new-api:release-receipt:v1",
+  "title": "New API exact OCI release receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source", "oci"],
+  "properties": {
+    "schema_version": { "const": "new-api-release-receipt/v1" },
+    "source": { "$ref": "new-api-source-provenance.schema.json" },
+    "oci": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest", "image_sbom_reference", "image_sbom_attestation_sha256"],
+      "properties": {
+        "repository": { "const": "ghcr.io/mlhjyx/new-api" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "image_sbom_reference": { "type": "string", "pattern": "^ghcr\\.io/mlhjyx/new-api@sha256:[0-9a-f]{64}$" },
+        "image_sbom_attestation_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}

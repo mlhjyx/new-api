@@ -284,6 +284,9 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			c.Abort()
 			return
 		}
+		if denyBoundDispatchTokenLegacyRead(c, token.Id) {
+			return
+		}
 
 		userCache, err := model.GetUserCache(token.UserId)
 		if err != nil {
@@ -438,6 +441,9 @@ func TokenAuth() func(c *gin.Context) {
 
 		err = SetupContextForToken(c, token, parts...)
 		if err != nil {
+			return
+		}
+		if !enforceSettlementDispatchBinding(c) {
 			return
 		}
 		c.Next()

@@ -29,13 +29,32 @@ type StreamErrorEntry struct {
 }
 
 type StreamStatus struct {
-	EndReason  StreamEndReason
-	EndError   error
-	endOnce    sync.Once
+	EndReason StreamEndReason
+	EndError  error
+	endOnce   sync.Once
 
-	mu         sync.Mutex
-	Errors     []StreamErrorEntry
-	ErrorCount int
+	mu                    sync.Mutex
+	Errors                []StreamErrorEntry
+	ErrorCount            int
+	terminalEventObserved bool
+}
+
+func (s *StreamStatus) MarkTerminalEventObserved() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.terminalEventObserved = true
+	s.mu.Unlock()
+}
+
+func (s *StreamStatus) HasTerminalEventObserved() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.terminalEventObserved
 }
 
 func NewStreamStatus() *StreamStatus {

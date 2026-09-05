@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func stopReasonClaude2OpenAI(reason string) string {
@@ -184,6 +185,11 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		err = HandleStreamResponseData(c, info, claudeInfo, data)
 		if err != nil {
 			sr.Stop(err)
+			return
+		}
+		if gjson.Get(data, "type").String() == "message_stop" {
+			info.StreamStatus.MarkTerminalEventObserved()
+			sr.Done()
 		}
 	})
 	if err != nil {

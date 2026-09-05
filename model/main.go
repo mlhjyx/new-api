@@ -124,6 +124,14 @@ func normalizeClickHouseDSN(dsn string) string {
 	return parsed.String()
 }
 
+func sqliteDSNWithSettlementForeignKeys(dsn string) string {
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	return dsn + separator + "_pragma=foreign_keys(1)"
+}
+
 func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error) {
 	dsn := os.Getenv(envName)
 	if dsn != "" {
@@ -150,7 +158,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error)
 		}
 		if strings.HasPrefix(dsn, "local") {
 			common.SysLog("SQL_DSN not set, using SQLite as database")
-			db, err := gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
+			db, err := gorm.Open(sqlite.Open(sqliteDSNWithSettlementForeignKeys(common.SQLitePath)), &gorm.Config{
 				PrepareStmt: true, // precompile SQL
 			})
 			return db, common.DatabaseTypeSQLite, err
@@ -172,7 +180,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error)
 	}
 	// Use SQLite
 	common.SysLog("SQL_DSN not set, using SQLite as database")
-	db, err := gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
+	db, err := gorm.Open(sqlite.Open(sqliteDSNWithSettlementForeignKeys(common.SQLitePath)), &gorm.Config{
 		PrepareStmt: true, // precompile SQL
 	})
 	return db, common.DatabaseTypeSQLite, err
@@ -276,6 +284,8 @@ func migrateDB() error {
 		&Option{},
 		&Redemption{},
 		&Ability{},
+		&SettlementReadbackCredential{},
+		&SettlementReadbackBinding{},
 		&Log{},
 		&Midjourney{},
 		&TopUp{},
@@ -302,6 +312,11 @@ func migrateDB() error {
 	)
 	if err != nil {
 		return err
+	}
+	if os.Getenv("LOG_SQL_DSN") == "" {
+		if err := EnsureSettlementReadbackSharedSchema(DB); err != nil {
+			return fmt.Errorf("failed to migrate settlement readback schema: %v", err)
+		}
 	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
@@ -330,7 +345,6 @@ func migrateDBFast() error {
 		{&Option{}, "Option"},
 		{&Redemption{}, "Redemption"},
 		{&Ability{}, "Ability"},
-		{&Log{}, "Log"},
 		{&Midjourney{}, "Midjourney"},
 		{&TopUp{}, "TopUp"},
 		{&QuotaData{}, "QuotaData"},
@@ -375,6 +389,23 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	// These migrations are ordered because Log has a foreign-key relationship to
+	// SettlementReadbackBinding. Running them in the concurrent fast path would
+	// make the schema race non-deterministically across supported databases.
+	if err := DB.AutoMigrate(&SettlementReadbackCredential{}); err != nil {
+		return fmt.Errorf("failed to migrate SettlementReadbackCredential: %v", err)
+	}
+	if err := DB.AutoMigrate(&SettlementReadbackBinding{}); err != nil {
+		return fmt.Errorf("failed to migrate SettlementReadbackBinding: %v", err)
+	}
+	if err := DB.AutoMigrate(&Log{}); err != nil {
+		return fmt.Errorf("failed to migrate Log: %v", err)
+	}
+	if os.Getenv("LOG_SQL_DSN") == "" {
+		if err := EnsureSettlementReadbackSharedSchema(DB); err != nil {
+			return fmt.Errorf("failed to migrate settlement readback schema: %v", err)
+		}
+	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
 			return err
@@ -392,7 +423,7 @@ func migrateLOGDB() error {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return migrateClickHouseLogDB()
 	}
-	return LOG_DB.AutoMigrate(&Log{})
+	return LOG_DB.AutoMigrate(&logWithoutSettlementReadback{})
 }
 
 func migrateClickHouseLogDB() error {

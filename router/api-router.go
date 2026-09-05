@@ -12,6 +12,7 @@ import (
 )
 
 func SetApiRouter(router *gin.Engine) {
+	router.GET("/api/corresponding-source/v1", controller.GetCorrespondingSource)
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"))
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
@@ -19,6 +20,20 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	anonymousRequestBodyLimit := middleware.AnonymousRequestBodyLimit()
 	{
+		settlementReadbackRoute := apiRouter.Group("/settlement-readback/v1")
+		settlementReadbackRoute.Use(middleware.SettlementReadbackAuth())
+		{
+			settlementReadbackRoute.GET("", controller.GetSettlementReadback)
+			settlementReadbackRoute.GET("/capability", controller.GetSettlementReadbackCapability)
+		}
+		settlementReadbackAdminRoute := apiRouter.Group("/settlement-readback/admin/v1")
+		settlementReadbackAdminRoute.Use(middleware.RootAuth(), middleware.CriticalRateLimit())
+		{
+			settlementReadbackAdminRoute.POST("/credentials", anonymousRequestBodyLimit, controller.CreateSettlementReadbackCredential)
+			settlementReadbackAdminRoute.POST("/credentials/:id/rotate", anonymousRequestBodyLimit, controller.RotateSettlementReadbackCredential)
+			settlementReadbackAdminRoute.POST("/credentials/:id/revoke", controller.RevokeSettlementReadbackCredential)
+		}
+
 		apiRouter.GET("/setup", controller.GetSetup)
 		apiRouter.POST("/setup", anonymousRequestBodyLimit, controller.PostSetup)
 		apiRouter.GET("/status", controller.GetStatus)

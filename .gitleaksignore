@@ -1,0 +1,17 @@
+# Reviewed source examples and non-secret protocol constants. Fingerprints are
+# intentionally line-bound: moving or changing a value forces a new review.
+common/str.go:gcp-api-key:261
+Dockerfile:generic-api-key:153
+controller/token_test.go:generic-api-key:394
+controller/token_test.go:generic-api-key:422
+controller/token_test.go:generic-api-key:449
+controller/token_test.go:generic-api-key:474
+middleware/auth.go:generic-api-key:149
+relay/channel/task/jimeng/adaptor.go:generic-api-key:226
+relay/channel/task/jimeng/adaptor.go:generic-api-key:410
+relay/channel/task/jimeng/adaptor.go:generic-api-key:412
+relay/channel/vertex/service_account.go:private-key:68
+# VChart minifies `nx.gaugePointer=` immediately after the literal `sankey`;
+# the generic-key rule treats that JavaScript property assignment as a key.
+web/default/dist/static/js/async/6956.756db2b9a3.js:generic-api-key:2
+web/classic/dist/static/js/async/3167.7108ad7909.js:generic-api-key:2

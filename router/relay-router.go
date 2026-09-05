@@ -1,6 +1,9 @@
 package router
 
 import (
+	"net/http"
+	"strings"
+
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
@@ -9,6 +12,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+func rejectNonCanonicalRelayPath(c *gin.Context) {
+	target := strings.TrimSuffix(c.Request.URL.Path, "/")
+	if c.Request.URL.RawQuery != "" {
+		target += "?" + c.Request.URL.RawQuery
+	}
+	c.Redirect(http.StatusTemporaryRedirect, target)
+}
 
 func SetRelayRouter(router *gin.Engine) {
 	router.Use(middleware.CORS())
@@ -71,6 +82,12 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
 	relayV1Router.Use(middleware.TokenAuth())
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
+	// Gin redirects trailing slashes before route middleware. Register exact
+	// rejection routes so bound dispatch tokens still cross TokenAuth and can
+	// never be redirected into one of the three settlement-capable paths.
+	relayV1Router.POST("/chat/completions/", rejectNonCanonicalRelayPath)
+	relayV1Router.POST("/responses/", rejectNonCanonicalRelayPath)
+	relayV1Router.POST("/messages/", rejectNonCanonicalRelayPath)
 	{
 		// WebSocket 路由（统一到 Relay）
 		wsRouter := relayV1Router.Group("")

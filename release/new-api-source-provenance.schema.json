@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mlhjyx:new-api:source-provenance:v1",
+  "title": "New API source provenance",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "upstream", "fork", "build", "corresponding_source", "license", "sbom"],
+  "properties": {
+    "schema_version": { "const": "new-api-source-provenance/v1" },
+    "upstream": { "$ref": "#/$defs/upstream" },
+    "fork": { "$ref": "#/$defs/fork" },
+    "build": { "$ref": "#/$defs/build" },
+    "corresponding_source": { "$ref": "#/$defs/correspondingSource" },
+    "license": { "$ref": "#/$defs/license" },
+    "sbom": { "$ref": "#/$defs/sourceSbom" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitObject": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "upstream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "canonical_url", "commit", "git_tree", "tree_archive_sha256", "source_archive_sha256", "license_sha256", "notice_sha256", "third_party_sha256"],
+      "properties": {
+        "schema_version": { "const": "new-api-upstream-base/v1" },
+        "canonical_url": { "const": "https://github.com/QuantumNous/new-api" },
+        "commit": { "$ref": "#/$defs/gitObject" },
+        "git_tree": { "$ref": "#/$defs/gitObject" },
+        "tree_archive_sha256": { "$ref": "#/$defs/sha256" },
+        "source_archive_sha256": { "$ref": "#/$defs/sha256" },
+        "license_sha256": { "$ref": "#/$defs/sha256" },
+        "notice_sha256": { "$ref": "#/$defs/sha256" },
+        "third_party_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "fork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_url", "commit", "git_tree", "patched_tree_sha256", "patch_series_sha256"],
+      "properties": {
+        "canonical_url": { "const": "https://github.com/mlhjyx/new-api" },
+        "commit": { "$ref": "#/$defs/gitObject" },
+        "git_tree": { "$ref": "#/$defs/gitObject" },
+        "patched_tree_sha256": { "$ref": "#/$defs/sha256" },
+        "patch_series_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recipe_sha256", "module_graph_sha256"],
+      "properties": {
+        "recipe_sha256": { "$ref": "#/$defs/sha256" },
+        "module_graph_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "correspondingSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "archive_uri", "archive_sha256"],
+      "properties": {
+        "uri": { "type": "string", "format": "uri", "pattern": "^https://github\\.com/mlhjyx/new-api/tree/[0-9a-f]{40}$" },
+        "archive_uri": { "type": "string", "format": "uri", "pattern": "^https://github\\.com/mlhjyx/new-api/releases/download/source-[0-9a-f]{40}/new-api-[0-9a-f]{40}\\.tar\\.gz$" },
+        "archive_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spdx", "license_sha256", "notice_sha256", "third_party_sha256"],
+      "properties": {
+        "spdx": { "const": "AGPL-3.0-only" },
+        "license_sha256": { "$ref": "#/$defs/sha256" },
+        "notice_sha256": { "$ref": "#/$defs/sha256" },
+        "third_party_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "sourceSbom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_dependency_sha256"],
+      "properties": {
+        "source_dependency_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

@@ -78,7 +78,41 @@ type Log struct {
 	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
 	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
 	Other             string `json:"other"`
+	// SettlementBindingId is used only by the exact settlement-readback path.
+	// It must never be populated from request text, Content, Other, or a
+	// gateway request id.
+	SettlementBindingId *int `json:"-"`
 }
+
+// logWithoutSettlementReadback is used only for a separately configured
+// relational LOG_DB. That topology cannot enforce a cross-database settlement
+// binding, so its migration must retain the legacy Log shape and omit both the
+// settlement column and relationship.
+type logWithoutSettlementReadback struct {
+	Id                int   `gorm:"index:idx_created_at_id,priority:2;index:idx_user_id_id,priority:2"`
+	UserId            int   `gorm:"index;index:idx_user_id_id,priority:1"`
+	CreatedAt         int64 `gorm:"bigint;index:idx_created_at_id,priority:1;index:idx_created_at_type"`
+	Type              int   `gorm:"index:idx_created_at_type"`
+	Content           string
+	Username          string `gorm:"index;index:index_username_model_name,priority:2;default:''"`
+	TokenName         string `gorm:"index;default:''"`
+	ModelName         string `gorm:"index;index:index_username_model_name,priority:1;default:''"`
+	Quota             int    `gorm:"default:0"`
+	PromptTokens      int    `gorm:"default:0"`
+	CompletionTokens  int    `gorm:"default:0"`
+	UseTime           int    `gorm:"default:0"`
+	IsStream          bool
+	ChannelId         int    `gorm:"index"`
+	ChannelName       string `gorm:"->"`
+	TokenId           int    `gorm:"default:0;index"`
+	Group             string `gorm:"index"`
+	Ip                string `gorm:"index;default:''"`
+	RequestId         string `gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
+	UpstreamRequestId string `gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
+	Other             string
+}
+
+func (logWithoutSettlementReadback) TableName() string { return "logs" }
 
 // don't use iota, avoid change log type value
 const (
@@ -326,23 +360,27 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 }
 
 type RecordConsumeLogParams struct {
-	ChannelId        int                    `json:"channel_id"`
-	PromptTokens     int                    `json:"prompt_tokens"`
-	CompletionTokens int                    `json:"completion_tokens"`
-	ModelName        string                 `json:"model_name"`
-	TokenName        string                 `json:"token_name"`
-	Quota            int                    `json:"quota"`
-	Content          string                 `json:"content"`
-	TokenId          int                    `json:"token_id"`
-	UseTimeSeconds   int                    `json:"use_time_seconds"`
-	IsStream         bool                   `json:"is_stream"`
-	Group            string                 `json:"group"`
-	Other            map[string]interface{} `json:"other"`
+	ChannelId           int                    `json:"channel_id"`
+	PromptTokens        int                    `json:"prompt_tokens"`
+	CompletionTokens    int                    `json:"completion_tokens"`
+	ModelName           string                 `json:"model_name"`
+	TokenName           string                 `json:"token_name"`
+	Quota               int                    `json:"quota"`
+	Content             string                 `json:"content"`
+	TokenId             int                    `json:"token_id"`
+	UseTimeSeconds      int                    `json:"use_time_seconds"`
+	IsStream            bool                   `json:"is_stream"`
+	Group               string                 `json:"group"`
+	Other               map[string]interface{} `json:"other"`
+	SettlementBindingId int                    `json:"-"`
 }
 
-func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
+func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) error {
 	if !common.LogConsumeEnabled {
-		return
+		if params.SettlementBindingId > 0 {
+			return errSettlementReadbackPersistence
+		}
+		return nil
 	}
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
@@ -383,9 +421,18 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
 	}
-	err := createLog(log)
+	var err error
+	if bindingID := params.SettlementBindingId; bindingID > 0 {
+		log.SettlementBindingId = &bindingID
+		err = LinkSettlementReadbackConsumeLog(DB, bindingID, log)
+	} else {
+		err = createLog(log)
+	}
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
+		if params.SettlementBindingId > 0 {
+			return errSettlementReadbackPersistence
+		}
 	}
 	if common.DataExportEnabled {
 		LogQuotaData(QuotaDataLogParams{
@@ -401,6 +448,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			NodeName:  common.NodeName,
 		})
 	}
+	return nil
 }
 
 type RecordTaskBillingLogParams struct {

@@ -31,6 +31,48 @@ type Adaptor interface {
 	ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error)
 }
 
+type SettlementDispatchFence string
+
+const (
+	SettlementDispatchFenceOpenAIChat                     SettlementDispatchFence = "settlement-dispatch/v1/channel=openai/api=openai/variant=chat/stream=false/converter=none/primitive=common-http-no-redirect-no-aux/v1"
+	SettlementDispatchFenceOpenAIChatStream               SettlementDispatchFence = "settlement-dispatch/v1/channel=openai/api=openai/variant=chat/stream=true/converter=none/primitive=common-http-no-redirect-no-aux/v1"
+	SettlementDispatchFenceOpenAIResponses                SettlementDispatchFence = "settlement-dispatch/v1/channel=openai/api=openai/variant=responses/stream=false/converter=none/primitive=common-http-no-redirect-no-aux/v1"
+	SettlementDispatchFenceOpenAIResponsesStream          SettlementDispatchFence = "settlement-dispatch/v1/channel=openai/api=openai/variant=responses/stream=true/converter=none/primitive=common-http-no-redirect-no-aux/v1"
+	SettlementDispatchFenceOpenAIChatViaResponses         SettlementDispatchFence = "settlement-dispatch/v1/channel=openai/api=openai/variant=chat/stream=false/converter=openai_chat_completions_to_openai_responses/primitive=common-http-no-redirect-no-aux/v1"
+	SettlementDispatchFenceOpenAIChatViaResponsesStream   SettlementDispatchFence = "settlement-dispatch/v1/channel=openai/api=openai/variant=chat/stream=true/converter=openai_chat_completions_to_openai_responses/primitive=common-http-no-redirect-no-aux/v1"
+	SettlementDispatchFenceAnthropicMessages              SettlementDispatchFence = "settlement-dispatch/v1/channel=anthropic/api=anthropic/variant=messages/stream=false/converter=none/primitive=common-http-no-redirect-no-aux/v1"
+	SettlementDispatchFenceAnthropicMessagesStream        SettlementDispatchFence = "settlement-dispatch/v1/channel=anthropic/api=anthropic/variant=messages/stream=true/converter=none/primitive=common-http-no-redirect-no-aux/v1"
+	SettlementDispatchFenceAdvancedResponsesViaChat       SettlementDispatchFence = "settlement-dispatch/v1/channel=advanced-custom/api=advanced-custom/variant=responses/stream=false/converter=openai_responses_to_openai_chat_completions/primitive=common-http-no-redirect-no-aux/v1"
+	SettlementDispatchFenceAdvancedResponsesViaChatStream SettlementDispatchFence = "settlement-dispatch/v1/channel=advanced-custom/api=advanced-custom/variant=responses/stream=true/converter=openai_responses_to_openai_chat_completions/primitive=common-http-no-redirect-no-aux/v1"
+)
+
+type SettlementDispatchFencedAdaptor interface {
+	SettlementDispatchFence(c *gin.Context, info *relaycommon.RelayInfo) SettlementDispatchFence
+}
+
+func ResolveSettlementDispatchFence(adaptor Adaptor, c *gin.Context, info *relaycommon.RelayInfo) (SettlementDispatchFence, bool) {
+	fenced, ok := adaptor.(SettlementDispatchFencedAdaptor)
+	if !ok {
+		return "", false
+	}
+	profile := fenced.SettlementDispatchFence(c, info)
+	switch profile {
+	case SettlementDispatchFenceOpenAIChat,
+		SettlementDispatchFenceOpenAIChatStream,
+		SettlementDispatchFenceOpenAIResponses,
+		SettlementDispatchFenceOpenAIResponsesStream,
+		SettlementDispatchFenceOpenAIChatViaResponses,
+		SettlementDispatchFenceOpenAIChatViaResponsesStream,
+		SettlementDispatchFenceAnthropicMessages,
+		SettlementDispatchFenceAnthropicMessagesStream,
+		SettlementDispatchFenceAdvancedResponsesViaChat,
+		SettlementDispatchFenceAdvancedResponsesViaChatStream:
+		return profile, true
+	default:
+		return "", false
+	}
+}
+
 type TaskAdaptor interface {
 	Init(info *relaycommon.RelayInfo)
 

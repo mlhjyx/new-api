@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -344,7 +345,33 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 	return "openai"
 }
 
-func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
+func SettlementReceiptPersistenceError() *types.NewAPIError {
+	return types.NewErrorWithStatusCode(
+		fmt.Errorf("settlement receipt persistence unavailable"),
+		types.ErrorCodeSettlementPersistenceFailed,
+		http.StatusInternalServerError,
+		types.ErrOptionWithSkipRetry(),
+	)
+}
+
+func SettlementStreamCompletionError(relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	if relayInfo == nil || relayInfo.SettlementBindingId == 0 || !relayInfo.IsStream {
+		return nil
+	}
+	if relayInfo.StreamStatus != nil &&
+		(relayInfo.StreamStatus.EndReason == relaycommon.StreamEndReasonDone || relayInfo.StreamStatus.HasTerminalEventObserved()) &&
+		!relayInfo.StreamStatus.HasErrors() {
+		return nil
+	}
+	return types.NewErrorWithStatusCode(
+		fmt.Errorf("settlement stream did not reach a verified terminal event"),
+		types.ErrorCodeSettlementStreamIncomplete,
+		http.StatusInternalServerError,
+		types.ErrOptionWithSkipRetry(),
+	)
+}
+
+func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) *types.NewAPIError {
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
 	if usage == nil {
@@ -398,14 +425,21 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
+		if relayInfo.SettlementBindingId > 0 {
+			// The upstream payload is already written at this point. Keep the
+			// existing pre-consumption and leave the binding pending rather
+			// than appending an error to a valid response or publishing a false
+			// exact receipt.
+			return nil
+		}
 	}
 
 	logModel := summary.ModelName
-	if strings.HasPrefix(logModel, "gpt-4-gizmo") {
+	if relayInfo.SettlementBindingId == 0 && strings.HasPrefix(logModel, "gpt-4-gizmo") {
 		logModel = "gpt-4-gizmo-*"
 		extraContent = append(extraContent, fmt.Sprintf("模型 %s", summary.ModelName))
 	}
-	if strings.HasPrefix(logModel, "gpt-4o-gizmo") {
+	if relayInfo.SettlementBindingId == 0 && strings.HasPrefix(logModel, "gpt-4o-gizmo") {
 		logModel = "gpt-4o-gizmo-*"
 		extraContent = append(extraContent, fmt.Sprintf("模型 %s", summary.ModelName))
 	}
@@ -423,7 +457,12 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["usage_semantic"] = "anthropic"
 	} else {
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+		other["usage_semantic"] = "openai"
 	}
+	// Exact settlement readback consumes only these closed numeric projections;
+	// write explicit zeros so absence can never be reinterpreted after a restart.
+	other["cache_creation_tokens"] = summary.CacheCreationTokens
+	other["cache_tokens"] = summary.CacheTokens
 	appendUsageBillingPathForLog(other, common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens), originUsage)
 	if adminRejectReason != "" {
 		other["reject_reason"] = adminRejectReason
@@ -488,21 +527,25 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	attachQuotaSaturation(ctx, relayInfo, other)
 
-	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
-		ChannelId:        relayInfo.ChannelId,
-		PromptTokens:     summary.PromptTokens,
-		CompletionTokens: summary.CompletionTokens,
-		ModelName:        logModel,
-		TokenName:        summary.TokenName,
-		Quota:            summary.Quota,
-		Content:          logContent,
-		TokenId:          relayInfo.TokenId,
-		UseTimeSeconds:   int(summary.UseTimeSeconds),
-		IsStream:         relayInfo.IsStream,
-		Group:            relayInfo.UsingGroup,
-		Other:            other,
-	})
+	if err := model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+		ChannelId:           relayInfo.ChannelId,
+		PromptTokens:        summary.PromptTokens,
+		CompletionTokens:    summary.CompletionTokens,
+		ModelName:           logModel,
+		TokenName:           summary.TokenName,
+		Quota:               summary.Quota,
+		Content:             logContent,
+		TokenId:             relayInfo.TokenId,
+		UseTimeSeconds:      int(summary.UseTimeSeconds),
+		IsStream:            relayInfo.IsStream,
+		Group:               relayInfo.UsingGroup,
+		Other:               other,
+		SettlementBindingId: relayInfo.SettlementBindingId,
+	}); err != nil {
+		return SettlementReceiptPersistenceError()
+	}
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))
 	})
+	return nil
 }

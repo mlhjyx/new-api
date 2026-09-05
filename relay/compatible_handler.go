@@ -68,26 +68,36 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
+	dispatchPlan := service.FreezeChatCompletionsDispatchPlan(info)
+	passThroughGlobal := model_setting.GetGlobalSettings().PassThroughRequestEnabled
+	if fenceError := requireSettlementDispatchFence(c, info, adaptor); fenceError != nil {
+		return fenceError
+	}
 	adaptor.Init(info)
 
-	passThroughGlobal := model_setting.GetGlobalSettings().PassThroughRequestEnabled
 	if info.RelayMode == relayconstant.RelayModeChatCompletions &&
-		!passThroughGlobal &&
-		!info.ChannelSetting.PassThroughBodyEnabled &&
-		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
+		dispatchPlan == service.ChatCompletionsDispatchResponses {
 		applySystemPromptIfNeeded(c, info, request)
 		usage, newApiErr := chatCompletionsViaResponses(c, info, adaptor, request)
 		if newApiErr != nil {
 			return newApiErr
+		}
+		if completionError := service.SettlementStreamCompletionError(info); completionError != nil {
+			return completionError
 		}
 
 		var containAudioTokens = usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
 		var containsAudioRatios = ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)
 
 		if containAudioTokens && containsAudioRatios {
+			if info.SettlementBindingId > 0 {
+				return service.SettlementReceiptPersistenceError()
+			}
 			service.PostAudioConsumeQuota(c, info, usage, "")
 		} else {
-			service.PostTextConsumeQuota(c, info, usage, nil)
+			if persistenceError := service.PostTextConsumeQuota(c, info, usage, nil); persistenceError != nil {
+				return persistenceError
+			}
 		}
 		return nil
 	}
@@ -210,14 +220,22 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		service.ResetStatusCode(newApiErr, statusCodeMappingStr)
 		return newApiErr
 	}
+	if completionError := service.SettlementStreamCompletionError(info); completionError != nil {
+		return completionError
+	}
 
 	var containAudioTokens = usage.(*dto.Usage).CompletionTokenDetails.AudioTokens > 0 || usage.(*dto.Usage).PromptTokensDetails.AudioTokens > 0
 	var containsAudioRatios = ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)
 
 	if containAudioTokens && containsAudioRatios {
+		if info.SettlementBindingId > 0 {
+			return service.SettlementReceiptPersistenceError()
+		}
 		service.PostAudioConsumeQuota(c, info, usage.(*dto.Usage), "")
 	} else {
-		service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
+		if persistenceError := service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil); persistenceError != nil {
+			return persistenceError
+		}
 	}
 	return nil
 }

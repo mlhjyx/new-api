@@ -294,6 +294,9 @@ func InjectGoogleAnalytics() {
 }
 
 func InitResources() error {
+	if err := common.ValidateManagedReleaseIdentity(); err != nil {
+		return fmt.Errorf("managed release identity is invalid: %w", err)
+	}
 	// Initialize resources here if needed
 	// This is a placeholder function for future resource initialization
 	err := godotenv.Load(".env")

@@ -9,7 +9,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -84,6 +86,78 @@ func TestOaiResponsesToChatStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
 		`"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5`,
 		`data: [DONE]`,
 	)
+}
+
+func TestResponsesCompletedEventTerminatesBoundStreamsWithoutDoneSentinel(t *testing.T) {
+	oldMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(oldMode) })
+
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	body := `data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}` + "\n"
+
+	for _, testCase := range []struct {
+		name    string
+		handler func(*gin.Context, *relaycommon.RelayInfo, *http.Response) (*dto.Usage, *types.NewAPIError)
+	}{
+		{name: "responses passthrough", handler: OaiResponsesStreamHandler},
+		{name: "responses to chat conversion", handler: OaiResponsesToChatStreamHandler},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			c, _, resp, info := newResponsesChatTestContext(t, body, true)
+			info.SettlementBindingId = 1
+
+			usage, relayErr := testCase.handler(c, info, resp)
+
+			require.Nil(t, relayErr)
+			require.NotNil(t, usage)
+			require.Equal(t, 5, usage.TotalTokens)
+			require.NotNil(t, info.StreamStatus)
+			require.Contains(t, []relaycommon.StreamEndReason{relaycommon.StreamEndReasonDone, relaycommon.StreamEndReasonEOF}, info.StreamStatus.EndReason)
+			require.True(t, info.StreamStatus.HasTerminalEventObserved())
+			require.Nil(t, service.SettlementStreamCompletionError(info))
+		})
+	}
+}
+
+func TestResponsesNonSuccessTerminalEventsRemainIncompleteForSettlement(t *testing.T) {
+	oldMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(oldMode) })
+
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	for _, eventType := range []string{"response.incomplete", "response.failed", "response.error"} {
+		t.Run(eventType, func(t *testing.T) {
+			body := `data: {"type":"` + eventType + `","response":{"status":"incomplete"}}` + "\n"
+			c, _, resp, info := newResponsesChatTestContext(t, body, true)
+			info.SettlementBindingId = 1
+
+			_, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+			require.Nil(t, relayErr)
+			require.NotNil(t, info.StreamStatus)
+			require.False(t, info.StreamStatus.HasTerminalEventObserved())
+			require.NotNil(t, service.SettlementStreamCompletionError(info))
+		})
+	}
+
+	t.Run("completed event with incomplete response status", func(t *testing.T) {
+		body := `data: {"type":"response.completed","response":{"status":"incomplete"}}` + "\n"
+		c, _, resp, info := newResponsesChatTestContext(t, body, true)
+		info.SettlementBindingId = 1
+
+		_, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+		require.Nil(t, relayErr)
+		require.False(t, info.StreamStatus.HasTerminalEventObserved())
+		require.NotNil(t, service.SettlementStreamCompletionError(info))
+	})
 }
 
 func TestOaiResponsesToChatBufferedStreamHandlerReturnsJSONFromSSE(t *testing.T) {

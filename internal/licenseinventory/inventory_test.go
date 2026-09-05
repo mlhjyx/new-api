@@ -1,0 +1,177 @@
+package licenseinventory
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestResolvedRuntimeEpayModuleContainsPinnedLicenseBytes(t *testing.T) {
+	repo := filepath.Clean(filepath.Join("..", ".."))
+
+	evidence, err := VerifyRuntimeEpayModule(context.Background(), repo)
+
+	require.NoError(t, err)
+	assert.Equal(t, "v0.0.5-0.20260612155053-774330a93901", evidence.Version)
+	assert.Equal(t, "86f028deb5895d8994571a0393face710851c29bb938e9b23fe7a9828efd99a8", evidence.LicenseSHA256)
+}
+
+func TestUnlicensedPeerPackagesAreRemovedByPrivateLocalAdapter(t *testing.T) {
+	repo := filepath.Clean(filepath.Join("..", ".."))
+	lock, err := os.ReadFile(filepath.Join(repo, "web", "bun.lock"))
+	require.NoError(t, err)
+	require.NotContains(t, string(lock), `"@giscus/react"`)
+	require.NotContains(t, string(lock), `"@splinetool/runtime"`)
+	require.Contains(t, string(lock), `"@lobehub/ui": "workspace:*"`)
+
+	for _, manifest := range []string{"web/default/package.json", "web/classic/package.json"} {
+		data, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(manifest)))
+		require.NoError(t, err)
+		require.Contains(t, string(data), `"@lobehub/ui": "workspace:*"`)
+	}
+
+	adapter, err := os.ReadFile(filepath.Join(repo, "web", "shared", "lobe-ui-adapter", "package.json"))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"name":"@lobehub/ui",
+		"version":"5.0.0",
+		"private":true,
+		"description":"GrowthOS private compatibility adapter for @lobehub/icons",
+		"license":"AGPL-3.0-only",
+		"type":"module",
+		"exports":{".":"./index.tsx","./icons":"./icons.tsx"},
+		"peerDependencies":{"react":"^19.0.0"}
+	}`, string(adapter))
+}
+
+func TestRepositoryDirectInventoryExactlyMatchesLocksAndReviewedTable(t *testing.T) {
+	repo := filepath.Clean(filepath.Join("..", ".."))
+
+	report, err := VerifyRepository(repo, true)
+
+	require.NoError(t, err)
+	assert.Equal(t, 59, report.GoDirect)
+	assert.Equal(t, 74, report.DefaultWebDirect)
+	assert.Equal(t, 52, report.ClassicWebDirect)
+	assert.Equal(t, 3, report.ElectronDirect)
+	assert.Equal(t, "v0.0.5-0.20260612155053-774330a93901", report.RuntimeEpayVersion)
+	assert.Equal(t, "86f028deb5895d8994571a0393face710851c29bb938e9b23fe7a9828efd99a8", report.RuntimeEpayLicenseSHA256)
+	assert.Equal(t, "APPROVED", report.ReviewStatus)
+	assert.Equal(t, 0, report.UnresolvedPackages)
+	assert.Regexp(t, `^[0-9a-f]{64}$`, report.AdapterSHA256)
+}
+
+func TestReleaseVerificationAcceptsClosedLicenseReview(t *testing.T) {
+	repo := filepath.Clean(filepath.Join("..", ".."))
+
+	_, err := VerifyRepository(repo, false)
+
+	assert.NoError(t, err)
+}
+
+func TestInventoryRejectsVersionDriftOrMissingRows(t *testing.T) {
+	tests := []struct {
+		name        string
+		oldValue    string
+		newValue    string
+		expectedErr string
+	}{
+		{name: "version drift", oldValue: "| backend     | production  | Go        | `github.com/waffo-com/waffo-go`", newValue: "| backend     | production  | Go        | `github.com/waffo-com/waffo-go-renamed`", expectedErr: "direct dependency inventory"},
+		{name: "missing row", oldValue: "| web/default | production  | npm       | `react`", newValue: "| web/default | production  | npm       | `react-removed`", expectedErr: "direct dependency inventory"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := copyLicenseFixture(t)
+			path := filepath.Join(repo, "THIRD-PARTY-LICENSES.md")
+			replaceLicenseOnce(t, path, test.oldValue, test.newValue)
+
+			_, err := VerifyRepository(repo, true)
+
+			assert.ErrorContains(t, err, test.expectedErr)
+		})
+	}
+}
+
+func TestLicenseAndOriginalNoticeArePreserved(t *testing.T) {
+	repo := copyLicenseFixture(t)
+	licensePath := filepath.Join(repo, "LICENSE")
+	require.NoError(t, os.WriteFile(licensePath, []byte("replacement license\n"), 0o644))
+	_, err := VerifyRepository(repo, true)
+	assert.ErrorContains(t, err, "AGPL license")
+
+	repo = copyLicenseFixture(t)
+	noticePath := filepath.Join(repo, "NOTICE")
+	replaceLicenseOnce(t, noticePath, "Copyright (c) QuantumNous and contributors.", "Copyright removed.")
+	_, err = VerifyRepository(repo, true)
+	assert.ErrorContains(t, err, "original NOTICE")
+}
+
+func TestLicenseReviewIsClosedAndBindsExactResolutions(t *testing.T) {
+	repo := copyLicenseFixture(t)
+	path := filepath.Join(repo, "release/license-review.json")
+	replaceLicenseOnce(t, path, "  \"unresolved\": []\n}\n", "  \"unresolved\": [],\n  \"unexpected\": true\n}\n")
+	_, err := VerifyRepository(repo, true)
+	assert.ErrorContains(t, err, "closed license review")
+
+	repo = copyLicenseFixture(t)
+	path = filepath.Join(repo, "release/license-review.json")
+	replaceLicenseOnce(t, path, "\"evidence_uri\": \"https://github.com/Calcium-Ion/go-epay/blob/774330a939012a2baab5776e890456d5f15d586e/LICENSE\"\n    }", "\"evidence_uri\": \"https://github.com/Calcium-Ion/go-epay/blob/774330a939012a2baab5776e890456d5f15d586e/LICENSE\",\n      \"unexpected\": true\n    }")
+	_, err = VerifyRepository(repo, true)
+	assert.ErrorContains(t, err, "closed license review")
+
+	repo = copyLicenseFixture(t)
+	path = filepath.Join(repo, "release/license-review.json")
+	replaceLicenseOnce(t, path, "\"name\": \"@splinetool/runtime\",\n      \"previous_version\": \"0.9.526\",\n      \"resolved_version\": \"NOT_PRESENT\"", "\"name\": \"@splinetool/runtime\",\n      \"previous_version\": \"0.9.526\",\n      \"resolved_version\": \"0.9.526\"")
+	_, err = VerifyRepository(repo, true)
+	assert.ErrorContains(t, err, "dependency resolution")
+
+	repo = copyLicenseFixture(t)
+	path = filepath.Join(repo, "web/shared/lobe-ui-adapter/icons.tsx")
+	replaceLicenseOnce(t, path, "viewBox='0 0 24 24'", "viewBox='0 0 25 25'")
+	_, err = VerifyRepository(repo, true)
+	assert.ErrorContains(t, err, "adapter evidence digest")
+}
+
+func copyLicenseFixture(t *testing.T) string {
+	t.Helper()
+	sourceRoot := filepath.Clean(filepath.Join("..", ".."))
+	targetRoot := t.TempDir()
+	for _, name := range []string{
+		"go.mod",
+		"go.sum",
+		"web/bun.lock",
+		"web/package.json",
+		"web/default/package.json",
+		"web/classic/package.json",
+		"electron/package.json",
+		"electron/package-lock.json",
+		"LICENSE",
+		"NOTICE",
+		"THIRD-PARTY-LICENSES.md",
+		"release/license-review.json",
+		"web/shared/lobe-ui-adapter/package.json",
+		"web/shared/lobe-ui-adapter/index.tsx",
+		"web/shared/lobe-ui-adapter/icons.tsx",
+	} {
+		data, err := os.ReadFile(filepath.Join(sourceRoot, filepath.FromSlash(name)))
+		require.NoError(t, err, name)
+		target := filepath.Join(targetRoot, filepath.FromSlash(name))
+		require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+		require.NoError(t, os.WriteFile(target, data, 0o644))
+	}
+	return targetRoot
+}
+
+func replaceLicenseOnce(t *testing.T, path string, oldValue string, newValue string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	content := string(data)
+	require.Equal(t, 1, strings.Count(content, oldValue), "fixture mutation must be exact")
+	require.NoError(t, os.WriteFile(path, []byte(strings.Replace(content, oldValue, newValue, 1)), 0o644))
+}

@@ -18,6 +18,9 @@ func CORS() gin.HandlerFunc {
 func Version() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("X-New-Api-Version", common.Version)
+		if identity, managed, err := common.CurrentReleaseIdentity(); err == nil && managed {
+			c.Header("Link", identity.LinkHeader())
+		}
 		c.Next()
 	}
 }
