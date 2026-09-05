@@ -55,7 +55,7 @@ jobs:
           # Dockerfile builds classic in its own filtered, clean Bun stage.
           # Sharing default's hoisted date-fns v4 breaks classic's tz v1 peer.
           NEW_API_CLASSIC_BUILD_ROOT=$(mktemp -d "${RUNNER_TEMP}/new-api-classic.XXXXXX")
-          git archive --format=tar HEAD:web | tar -xf - -C "${NEW_API_CLASSIC_BUILD_ROOT}"
+          git -C "${GITHUB_WORKSPACE}" archive --format=tar HEAD:web | tar -xf - -C "${NEW_API_CLASSIC_BUILD_ROOT}"
           cd "${NEW_API_CLASSIC_BUILD_ROOT}"
           bun install --filter ./classic --frozen-lockfile
           cd classic
