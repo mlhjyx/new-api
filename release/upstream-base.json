@@ -1,0 +1,11 @@
+{
+  "schema_version": "new-api-upstream-base/v1",
+  "canonical_url": "https://github.com/QuantumNous/new-api",
+  "commit": "21a1d0db5b144dfe4b0e2c2de7de1b96e4c0d2ec",
+  "git_tree": "abf286518dbf53b3c107b7c54dcc40a49c5bbf6f",
+  "tree_archive_sha256": "d25ddff44b469145b25d46f57af920982193f0872a86e93967c51b06c7a02702",
+  "source_archive_sha256": "234709b6b47cae66696a640d07f85c21997e7425d68a27169e7ca11793ad67dc",
+  "license_sha256": "3a427a45a5dd0b6ae06b4dd1937bb357971ffe18ccbfc81f0c49eb55ae27458e",
+  "notice_sha256": "9be62a396e9f86bcfea6d72c3202340b3d486cd279c26bd3be6211ce19e90399",
+  "third_party_sha256": "c27489d022ad3b8153739482e6addbd6c05e6e2f852de89d38e531f8ebf5095a"
+}
