@@ -1,16 +1,1 @@
-.github
 .git
-*.md
-.vscode
-.gitignore
-Makefile
-docs
-.eslintcache
-.gocache
-/web/node_modules
-/web/default/node_modules
-/web/default/dist
-/web/classic/node_modules
-/web/classic/dist
-!THIRD-PARTY-LICENSES.md
-!release/license-review.md
