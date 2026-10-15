@@ -571,6 +571,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		relayClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		}
+		pinSettlementSingleWire(req)
 		if !model.BeginSettlementReadbackDispatch(model.DB, bindingID) {
 			return nil, errors.New("settlement physical dispatch denied")
 		}

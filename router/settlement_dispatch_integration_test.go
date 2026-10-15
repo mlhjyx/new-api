@@ -240,6 +240,58 @@ func TestSettlementDispatchRejectsUnsupportedAndAmbiguousRouterPathsWithoutRedir
 	assert.Zero(t, bindings)
 }
 
+// Upstream v1.0.0-rc.44 added relay routes that did not exist at the fork's
+// previous base: the Responses WebSocket upgrade on GET /v1/responses and the
+// compact and alpha search endpoints. A bound dispatch token must never reach
+// them, with or without settlement headers, and must never create a binding.
+func TestSettlementBoundTokenCannotReachUpstreamRC44RelayRoutes(t *testing.T) {
+	var physicalWires atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		physicalWires.Add(1)
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	db, engine := newSettlementDispatchIntegrationHarness(t, "rc44-routes", upstream.URL, constant.ChannelTypeOpenAI, "")
+	for index, target := range []struct {
+		method      string
+		path        string
+		withHeaders bool
+		websocket   bool
+	}{
+		{method: http.MethodGet, path: "/v1/responses", withHeaders: true, websocket: true},
+		{method: http.MethodGet, path: "/v1/responses", websocket: true},
+		{method: http.MethodPost, path: "/v1/responses/compact", withHeaders: true},
+		{method: http.MethodPost, path: "/v1/alpha/search", withHeaders: true},
+	} {
+		requestID, nonce := "", ""
+		if target.withHeaders {
+			requestID = settlementDispatchOpaque(byte(index + 150))
+			nonce = settlementDispatchOpaque(byte(index + 170))
+		}
+		request := httptest.NewRequest(target.method, target.path, bytes.NewBufferString(`{"model":"gpt-4o-mini","input":"hello"}`))
+		request.Header.Set("Authorization", "Bearer sk-settlementdispatch")
+		request.Header.Set("Content-Type", "application/json")
+		if target.websocket {
+			request.Header.Set("Connection", "Upgrade")
+			request.Header.Set("Upgrade", "websocket")
+			request.Header.Set("Sec-WebSocket-Version", "13")
+			request.Header.Set("Sec-WebSocket-Key", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x5a}, 16)))
+		}
+		if requestID != "" {
+			request.Header.Set(common.SettlementReadbackRequestIdHeader, requestID)
+			request.Header.Set(common.SettlementReadbackNonceHeader, nonce)
+		}
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		assert.Equal(t, http.StatusForbidden, response.Code, "%s %s headers=%t", target.method, target.path, target.withHeaders)
+	}
+	assert.Zero(t, physicalWires.Load())
+	var bindings int64
+	require.NoError(t, db.Model(&model.SettlementReadbackBinding{}).Count(&bindings).Error)
+	assert.Zero(t, bindings)
+}
+
 func TestSettlementDispatchRejectsAdaptersOutsideCommonCASWithoutFallbackWire(t *testing.T) {
 	tests := []struct {
 		name                 string

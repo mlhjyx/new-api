@@ -319,6 +319,18 @@ func PrepareTaskPluginRoute() gin.HandlerFunc {
 	}
 }
 
+// denySettlementBoundTaskPluginEndpoint keeps a settlement-bound request away
+// from a plugin-owned endpoint. A plugin serves the request with its own
+// outbound calls, outside the fenced single-wire relay seam and without an
+// exact receipt, so the request fails closed before any plugin code runs.
+func denySettlementBoundTaskPluginEndpoint(c *gin.Context) bool {
+	if c.GetInt(SettlementReadbackBindingIDContextKey) <= 0 {
+		return false
+	}
+	abortWithOpenAiMessage(c, http.StatusServiceUnavailable, "settlement dispatch fence unavailable", types.ErrorCodeSettlementDispatchFenceUnavailable)
+	return true
+}
+
 // PinTaskPluginEndpoint decides shared-endpoint ownership without executing
 // plugin code. Invalid or unidentifiable ordinary requests deliberately fall
 // through so the existing endpoint remains responsible for its validation.
@@ -372,6 +384,9 @@ func PinTaskPluginEndpoint() gin.HandlerFunc {
 		if !found || binding.Plugin == nil {
 			c.Set(contextKeyTaskPluginEndpointModel, *modelRequest)
 			c.Next()
+			return
+		}
+		if denySettlementBoundTaskPluginEndpoint(c) {
 			return
 		}
 		if rewriteTo != "" {
