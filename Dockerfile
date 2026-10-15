@@ -15,31 +15,15 @@ ARG NOTICE_SHA256
 ARG THIRD_PARTY_SHA256
 ARG GO_MODULE_PROXY=https://proxy.golang.org,direct
 
-FROM oven/bun:1@sha256:0733e50325078969732ebe3b15ce4c4be5082f18c4ac1a0f0ca4839c2e4e42a7 AS builder
+FROM oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6 AS builder
 
 ARG NEW_API_VERSION
 WORKDIR /build/web
 COPY web/package.json web/bun.lock ./
-COPY web/default/package.json ./default/package.json
-COPY web/classic/package.json ./classic/package.json
 COPY web/shared/lobe-ui-adapter/package.json ./shared/lobe-ui-adapter/package.json
 RUN bun install --frozen-lockfile
-COPY web/shared/lobe-ui-adapter ./shared/lobe-ui-adapter
-COPY ./web/default ./default
-RUN cd default && DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION="${NEW_API_VERSION}" bun run build
-
-FROM oven/bun:1@sha256:0733e50325078969732ebe3b15ce4c4be5082f18c4ac1a0f0ca4839c2e4e42a7 AS builder-classic
-
-ARG NEW_API_VERSION
-WORKDIR /build/web
-COPY web/package.json web/bun.lock ./
-COPY web/default/package.json ./default/package.json
-COPY web/classic/package.json ./classic/package.json
-COPY web/shared/lobe-ui-adapter/package.json ./shared/lobe-ui-adapter/package.json
-RUN bun install --filter ./classic --frozen-lockfile
-COPY web/shared/lobe-ui-adapter ./shared/lobe-ui-adapter
-COPY ./web/classic ./classic
-RUN cd classic && VITE_REACT_APP_VERSION="${NEW_API_VERSION}" bun run build
+COPY ./web ./
+RUN DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION="${NEW_API_VERSION}" bun run build
 
 FROM golang:1.26.1-alpine@sha256:2389ebfa5b7f43eeafbd6be0c3700cc46690ef842ad962f6c5bd6be49ed82039 AS builder2
 
@@ -60,7 +44,7 @@ ARG NOTICE_SHA256
 ARG THIRD_PARTY_SHA256
 ARG GO_MODULE_PROXY
 
-ENV GO111MODULE=on CGO_ENABLED=0
+ENV GO111MODULE=on CGO_ENABLED=0 GOWORK=off
 ARG TARGETOS
 ARG TARGETARCH
 ENV GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64}
@@ -68,6 +52,10 @@ ENV GOEXPERIMENT=greenteagc
 
 WORKDIR /build
 COPY go.mod go.sum ./
+# relaykit and tokenkit are local modules referenced via replace; their go.mod
+# files must be present for go mod download to resolve the main module graph.
+COPY relaykit/go.mod ./relaykit/go.mod
+COPY tokenkit/go.mod ./tokenkit/go.mod
 RUN --mount=type=cache,id=new-api-go-mod,target=/go/pkg/mod,sharing=locked \
     set -eu; \
     for attempt in 1 2 3; do \
@@ -75,8 +63,7 @@ RUN --mount=type=cache,id=new-api-go-mod,target=/go/pkg/mod,sharing=locked \
       test "${attempt}" -lt 3; \
     done
 COPY . .
-COPY --from=builder /build/web/default/dist ./web/default/dist
-COPY --from=builder-classic /build/web/classic/dist ./web/classic/dist
+COPY --from=builder /build/web/dist ./web/dist
 
 RUN set -eu; \
     case "${RELEASE_REVISION}" in *[!0-9a-f]*|'') exit 1 ;; esac; \
@@ -95,7 +82,9 @@ RUN set -eu; \
 
 RUN --mount=type=cache,id=new-api-go-mod,target=/go/pkg/mod,sharing=locked \
     --mount=type=cache,id=new-api-go-build,target=/root/.cache/go-build,sharing=locked \
-    GOPROXY="${GO_MODULE_PROXY}" GOSUMDB=sum.golang.org go build -trimpath -mod=readonly -ldflags "-s -w \
+    GOPROXY="${GO_MODULE_PROXY}" GOSUMDB=sum.golang.org go build -trimpath -mod=readonly \
+    -pgo="$(GOPROXY="${GO_MODULE_PROXY}" go list -mod=readonly -m -f '{{.Dir}}' github.com/Calcium-Ion/moejs)/default.pgo" \
+    -ldflags "-s -w \
     -X github.com/QuantumNous/new-api/common.Version=${NEW_API_VERSION} \
     -X github.com/QuantumNous/new-api/common.BuildReleaseProfile=managed \
     -X github.com/QuantumNous/new-api/common.BuildReleaseVersion=${NEW_API_VERSION} \

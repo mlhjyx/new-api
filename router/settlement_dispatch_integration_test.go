@@ -769,7 +769,10 @@ func newSettlementDispatchIntegrationHarness(t *testing.T, name string, upstream
 
 	engine := gin.New()
 	engine.Use(middleware.RequestId())
+	// Mirror SetRouter: since upstream v1.0.0-rc.27 POST /v1/responses is served
+	// by the host protocol router, not by SetRelayRouter.
 	SetRelayRouter(engine)
+	SetTaskPluginProtocolRouter(engine)
 	SetVideoRouter(engine)
 	return db, engine
 }

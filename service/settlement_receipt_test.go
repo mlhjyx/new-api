@@ -10,10 +10,11 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -117,10 +118,10 @@ func TestPostTextConsumeQuotaDoesNotLinkReceiptWhenBillingSettlementFails(t *tes
 		StartTime:           time.Now(),
 		Billing:             billing,
 		ChannelMeta:         &relaycommon.ChannelMeta{ChannelId: 434343},
-		PriceData: types.PriceData{
+		PriceData: hosttypes.PriceData{
 			ModelRatio:      1,
 			CompletionRatio: 1,
-			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
 		},
 	}
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -169,10 +170,10 @@ func TestPostTextConsumeQuotaKeepsBoundGizmoModelExact(t *testing.T) {
 				StartTime:           time.Now(),
 				Billing:             billing,
 				ChannelMeta:         &relaycommon.ChannelMeta{ChannelId: 434344 + index},
-				PriceData: types.PriceData{
+				PriceData: hosttypes.PriceData{
 					ModelRatio:      0,
 					CompletionRatio: 1,
-					GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+					GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
 				},
 			}
 			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
