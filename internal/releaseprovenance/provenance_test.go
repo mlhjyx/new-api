@@ -23,6 +23,7 @@ const (
 
 func TestPinnedUpstreamBaseMatchesApprovedGitObject(t *testing.T) {
 	repo := filepath.Clean(filepath.Join("..", ".."))
+	skipShallowCheckoutWithoutPinnedBase(t, repo)
 
 	manifest, err := VerifyPinnedUpstream(context.Background(), repo)
 	require.NoError(t, err)
@@ -490,4 +491,20 @@ func sha256File(t *testing.T, path string) string {
 	require.NoError(t, err)
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])
+}
+
+// skipShallowCheckoutWithoutPinnedBase lets upstream's shallow CI checkout
+// (actions/checkout fetch-depth: 1 in ci.yml) run the suite. The fork release
+// workflows check out full history, where the pinned base must resolve, so
+// this never skips there and the gate stays fail-closed.
+func skipShallowCheckoutWithoutPinnedBase(t *testing.T, repo string) {
+	t.Helper()
+	shallow, err := exec.Command("git", "-C", repo, "rev-parse", "--is-shallow-repository").Output()
+	if err != nil || strings.TrimSpace(string(shallow)) != "true" {
+		return
+	}
+	if exec.Command("git", "-C", repo, "cat-file", "-e", PinnedUpstreamCommit+"^{commit}").Run() == nil {
+		return
+	}
+	t.Skip("shallow checkout lacks the pinned upstream base; the fork release workflow verifies it with full history")
 }

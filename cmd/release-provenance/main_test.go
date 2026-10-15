@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/internal/releaseprovenance"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -13,8 +16,10 @@ import (
 func TestRunVerifiesThePinnedUpstreamManifest(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
+	repo := filepath.Clean(filepath.Join("..", ".."))
+	skipShallowCheckoutWithoutPinnedBase(t, repo)
 
-	exitCode := run([]string{"verify-upstream", "--repo", filepath.Clean(filepath.Join("..", ".."))}, &stdout, &stderr)
+	exitCode := run([]string{"verify-upstream", "--repo", repo}, &stdout, &stderr)
 
 	assert.Equal(t, 0, exitCode)
 	assert.Equal(t, "633b4c5b190dc1af99a2814391354d86948e7943\n", stdout.String())
@@ -54,4 +59,20 @@ func TestPrepareSourceRejectsAnUnboundedTimeout(t *testing.T) {
 	assert.Equal(t, 2, exitCode)
 	assert.Empty(t, stdout.String())
 	assert.Contains(t, stderr.String(), "timeout must be between 1s and 10m")
+}
+
+// skipShallowCheckoutWithoutPinnedBase lets upstream's shallow CI checkout
+// (actions/checkout fetch-depth: 1 in ci.yml) run the suite. The fork release
+// workflows check out full history, where the pinned base must resolve, so
+// this never skips there and the gate stays fail-closed.
+func skipShallowCheckoutWithoutPinnedBase(t *testing.T, repo string) {
+	t.Helper()
+	shallow, err := exec.Command("git", "-C", repo, "rev-parse", "--is-shallow-repository").Output()
+	if err != nil || strings.TrimSpace(string(shallow)) != "true" {
+		return
+	}
+	if exec.Command("git", "-C", repo, "cat-file", "-e", releaseprovenance.PinnedUpstreamCommit+"^{commit}").Run() == nil {
+		return
+	}
+	t.Skip("shallow checkout lacks the pinned upstream base; the fork release workflow verifies it with full history")
 }
