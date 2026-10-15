@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -16,6 +17,22 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// FirstByteUnbilledLogCode marks one attempt whose upstream stream failed
+// before any byte reached the client. Such an attempt returns the retryable
+// 502, writes no consume log and is never billed: the request is either
+// settled by a later successful attempt or its pre-consumption is refunded.
+// Count these lines per request_id to reconcile upstream usage (for example
+// the openox bill) against new-api consume logs.
+const FirstByteUnbilledLogCode = "NEWAPI_FIRST_BYTE_UNBILLED"
+
+var firstByteUnbilledAttempts atomic.Int64
+
+// FirstByteUnbilledAttempts returns how many attempts this process has logged
+// with FirstByteUnbilledLogCode since it started.
+func FirstByteUnbilledAttempts() int64 {
+	return firstByteUnbilledAttempts.Load()
+}
 
 // maxStreamErrorFieldLength bounds the upstream error type/code copied into
 // logs and relay errors; upstream messages are never copied.
@@ -143,6 +160,19 @@ func checkUpstreamStreamEnd(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	if !retryable {
 		return nil
 	}
+	modelName := "-"
+	if info.ChannelMeta != nil && info.UpstreamModelName != "" {
+		modelName = info.UpstreamModelName
+	}
+	upstreamRequestID := c.GetString(common.UpstreamRequestIdKey)
+	if upstreamRequestID == "" {
+		upstreamRequestID = "-"
+	}
+	logger.LogWarn(c, fmt.Sprintf(
+		"%s unbilled_attempts_total=%d request_id=%s upstream_request_id=%s channel_id=%d model=%s retry_index=%d reason=%s upstream_error_code=%s proto=%s",
+		FirstByteUnbilledLogCode, firstByteUnbilledAttempts.Add(1), c.GetString(common.RequestIdKey), upstreamRequestID,
+		info.ChannelId, modelName, info.RetryIndex, endReason, errorCode, proto,
+	))
 	return types.NewOpenAIError(
 		fmt.Errorf("upstream stream ended before the first response byte (reason=%s, upstream_error_code=%s)", endReason, errorCode),
 		types.ErrorCodeUpstreamStreamAbortedBeforeFirstByte,
