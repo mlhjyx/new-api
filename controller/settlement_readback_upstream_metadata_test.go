@@ -3,6 +3,7 @@ package controller
 import (
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	hosttypes "github.com/QuantumNous/new-api/types"
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -64,7 +66,7 @@ func TestSettlementReadbackClosedReceiptAcceptsUpstreamConsumeLogMetadata(t *tes
 // hand-written fixture, so a future upstream key surfaces here first.
 func TestSettlementReadbackClosedReceiptCoversRealConsumeLogWriter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open("file:settlement-readback-upstream-writer?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "settlement-readback-upstream-writer.db")+"?_pragma=foreign_keys(1)"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, model.EnsureSettlementReadbackSharedSchema(db))
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}))
@@ -72,12 +74,16 @@ func TestSettlementReadbackClosedReceiptCoversRealConsumeLogWriter(t *testing.T)
 	originalMainType, originalLogType := common.MainDatabaseType(), common.LogDatabaseType()
 	originalConsume, originalExport, originalBatch := common.LogConsumeEnabled, common.DataExportEnabled, common.BatchUpdateEnabled
 	originalRedis := common.RedisEnabled
+	asyncWorkerBaseline := gopool.WorkerCount()
 	model.DB, model.LOG_DB = db, db
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	common.SetLogDatabaseType(common.DatabaseTypeSQLite)
 	common.LogConsumeEnabled, common.DataExportEnabled, common.BatchUpdateEnabled = true, false, false
 	common.RedisEnabled = false
 	t.Cleanup(func() {
+		// PostTextConsumeQuota updates quotas on gopool workers that read these
+		// globals; let them finish before restoring the previous values.
+		waitForTestAsyncWorkers(asyncWorkerBaseline)
 		common.RedisEnabled = originalRedis
 		model.DB, model.LOG_DB = originalDB, originalLogDB
 		common.SetMainDatabaseType(originalMainType)
