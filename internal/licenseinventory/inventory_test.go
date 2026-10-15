@@ -17,7 +17,7 @@ func TestResolvedRuntimeEpayModuleContainsPinnedLicenseBytes(t *testing.T) {
 	evidence, err := VerifyRuntimeEpayModule(context.Background(), repo)
 
 	require.NoError(t, err)
-	assert.Equal(t, "v0.0.5-0.20260612155053-774330a93901", evidence.Version)
+	assert.Equal(t, "v0.0.5", evidence.Version)
 	assert.Equal(t, "86f028deb5895d8994571a0393face710851c29bb938e9b23fe7a9828efd99a8", evidence.LicenseSHA256)
 }
 
@@ -29,7 +29,7 @@ func TestUnlicensedPeerPackagesAreRemovedByPrivateLocalAdapter(t *testing.T) {
 	require.NotContains(t, string(lock), `"@splinetool/runtime"`)
 	require.Contains(t, string(lock), `"@lobehub/ui": "workspace:*"`)
 
-	for _, manifest := range []string{"web/default/package.json", "web/classic/package.json"} {
+	for _, manifest := range []string{"web/package.json"} {
 		data, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(manifest)))
 		require.NoError(t, err)
 		require.Contains(t, string(data), `"@lobehub/ui": "workspace:*"`)
@@ -55,11 +55,10 @@ func TestRepositoryDirectInventoryExactlyMatchesLocksAndReviewedTable(t *testing
 	report, err := VerifyRepository(repo, true)
 
 	require.NoError(t, err)
-	assert.Equal(t, 59, report.GoDirect)
-	assert.Equal(t, 74, report.DefaultWebDirect)
-	assert.Equal(t, 52, report.ClassicWebDirect)
+	assert.Equal(t, 73, report.GoDirect)
+	assert.Equal(t, 84, report.WebDirect)
 	assert.Equal(t, 3, report.ElectronDirect)
-	assert.Equal(t, "v0.0.5-0.20260612155053-774330a93901", report.RuntimeEpayVersion)
+	assert.Equal(t, "v0.0.5", report.RuntimeEpayVersion)
 	assert.Equal(t, "86f028deb5895d8994571a0393face710851c29bb938e9b23fe7a9828efd99a8", report.RuntimeEpayLicenseSHA256)
 	assert.Equal(t, "APPROVED", report.ReviewStatus)
 	assert.Equal(t, 0, report.UnresolvedPackages)
@@ -81,8 +80,8 @@ func TestInventoryRejectsVersionDriftOrMissingRows(t *testing.T) {
 		newValue    string
 		expectedErr string
 	}{
-		{name: "version drift", oldValue: "| backend     | production  | Go        | `github.com/waffo-com/waffo-go`", newValue: "| backend     | production  | Go        | `github.com/waffo-com/waffo-go-renamed`", expectedErr: "direct dependency inventory"},
-		{name: "missing row", oldValue: "| web/default | production  | npm       | `react`", newValue: "| web/default | production  | npm       | `react-removed`", expectedErr: "direct dependency inventory"},
+		{name: "version drift", oldValue: "| backend  | production  | Go        | `github.com/waffo-com/waffo-go`", newValue: "| backend  | production  | Go        | `github.com/waffo-com/waffo-go-renamed`", expectedErr: "direct dependency inventory"},
+		{name: "missing row", oldValue: "| web      | production  | npm       | `react`", newValue: "| web      | production  | npm       | `react-removed`", expectedErr: "direct dependency inventory"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -120,13 +119,13 @@ func TestLicenseReviewIsClosedAndBindsExactResolutions(t *testing.T) {
 
 	repo = copyLicenseFixture(t)
 	path = filepath.Join(repo, "release/license-review.json")
-	replaceLicenseOnce(t, path, "\"evidence_uri\": \"https://github.com/Calcium-Ion/go-epay/blob/774330a939012a2baab5776e890456d5f15d586e/LICENSE\"\n    }", "\"evidence_uri\": \"https://github.com/Calcium-Ion/go-epay/blob/774330a939012a2baab5776e890456d5f15d586e/LICENSE\",\n      \"unexpected\": true\n    }")
+	replaceLicenseOnce(t, path, "\"evidence_uri\": \"https://github.com/Calcium-Ion/go-epay/blob/b6694eb473b09a94decd8ee71f9946156fda5e17/LICENSE\"\n    }", "\"evidence_uri\": \"https://github.com/Calcium-Ion/go-epay/blob/b6694eb473b09a94decd8ee71f9946156fda5e17/LICENSE\",\n      \"unexpected\": true\n    }")
 	_, err = VerifyRepository(repo, true)
 	assert.ErrorContains(t, err, "closed license review")
 
 	repo = copyLicenseFixture(t)
 	path = filepath.Join(repo, "release/license-review.json")
-	replaceLicenseOnce(t, path, "\"name\": \"@splinetool/runtime\",\n      \"previous_version\": \"0.9.526\",\n      \"resolved_version\": \"NOT_PRESENT\"", "\"name\": \"@splinetool/runtime\",\n      \"previous_version\": \"0.9.526\",\n      \"resolved_version\": \"0.9.526\"")
+	replaceLicenseOnce(t, path, "\"name\": \"@splinetool/runtime\",\n      \"previous_version\": \"1.12.98\",\n      \"resolved_version\": \"NOT_PRESENT\"", "\"name\": \"@splinetool/runtime\",\n      \"previous_version\": \"1.12.98\",\n      \"resolved_version\": \"1.12.98\"")
 	_, err = VerifyRepository(repo, true)
 	assert.ErrorContains(t, err, "dependency resolution")
 
@@ -146,8 +145,6 @@ func copyLicenseFixture(t *testing.T) string {
 		"go.sum",
 		"web/bun.lock",
 		"web/package.json",
-		"web/default/package.json",
-		"web/classic/package.json",
 		"electron/package.json",
 		"electron/package-lock.json",
 		"LICENSE",

@@ -11,13 +11,13 @@ import (
 const (
 	releaseUpstreamURL           = "https://github.com/QuantumNous/new-api"
 	releaseForkURL               = "https://github.com/mlhjyx/new-api"
-	releaseUpstreamRevision      = "bde9b2f44887d34ec54799ae191d50f97914359e"
-	releaseUpstreamGitTree       = "8d25730d7f58a83778ef23b3a8ccd255d2d91701"
-	releaseUpstreamTreeSHA256    = "07923f60654b9eadda476ea4f269524273b0edeb5287b50c602c4e6921afb6d4"
-	releaseUpstreamArchiveSHA256 = "3f532d1b4f48153277342e98c54b06665b0c472118b0f032ddcc70233c288331"
+	releaseUpstreamRevision      = "633b4c5b190dc1af99a2814391354d86948e7943"
+	releaseUpstreamGitTree       = "49914c98d34046b597d1dfa2ab0f0e022fc4642b"
+	releaseUpstreamTreeSHA256    = "4887a0d45023fc349fff7dacb52effe25a21d2578696744504e27799cfa293ad"
+	releaseUpstreamArchiveSHA256 = "79730bae9aacbc671997551b0fa16cfda892575f71e31c804e2d6ae8b211a77c"
 	releaseUpstreamLicenseSHA256 = "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef"
 	releaseUpstreamNoticeSHA256  = "528067fcdf4f9d7e3fdb489d02cbdd36a0efa63fc2eb1686340612c26beb9f33"
-	releaseUpstreamThirdPartySHA = "33d93b4c0522a727be82f1a0cd12b09d8b7d10ed8117529dc373f4d7e2f37aa3"
+	releaseUpstreamThirdPartySHA = "9fbf84bd75bdb45d8d430c32ddf02816bb8e6828b49c66d92f4b047b0f74361b"
 )
 
 var releaseGitObjectPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)

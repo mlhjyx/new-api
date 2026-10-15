@@ -63,7 +63,7 @@ func installReleaseBuildFixture(t *testing.T, revision string, digest string) fu
 	BuildReleaseVersion = "production-parity-" + revision
 	BuildReleaseRevision = revision
 	BuildReleaseGitTree = strings.Repeat("c", 40)
-	BuildUpstreamRevision = "bde9b2f44887d34ec54799ae191d50f97914359e"
+	BuildUpstreamRevision = "633b4c5b190dc1af99a2814391354d86948e7943"
 	BuildPatchSeriesSHA256 = digest
 	BuildPatchedTreeSHA256 = digest
 	BuildRecipeSHA256 = digest

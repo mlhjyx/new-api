@@ -298,7 +298,21 @@ func settlementReadbackAllowedLegacyOtherField(name string) bool {
 		"input_tokens_total",
 		"billing_mode",
 		"expr_b64",
-		"matched_tier":
+		"matched_tier",
+		// Written by the upstream v1.0.0-rc.44 text consume path: structured
+		// log content, the observed response model, the tool surcharge list
+		// that replaced the per-tool web_search/file_search fields, and the
+		// tiered/fixed-price billing projections. None of them feeds the exact
+		// receipt; they are accepted only so the closed parse keeps succeeding.
+		"content_parts",
+		"response_model",
+		"tool_surcharges",
+		"billing_tokens",
+		"billing_unit",
+		"image_cache_tokens",
+		"image_count",
+		"fixed_price",
+		"request_rules":
 		return true
 	default:
 		return false

@@ -62,7 +62,7 @@ func installControllerReleaseIdentity(t *testing.T, revision string, digest stri
 	common.BuildReleaseVersion = "production-parity-" + revision
 	common.BuildReleaseRevision = revision
 	common.BuildReleaseGitTree = strings.Repeat("c", 40)
-	common.BuildUpstreamRevision = "bde9b2f44887d34ec54799ae191d50f97914359e"
+	common.BuildUpstreamRevision = "633b4c5b190dc1af99a2814391354d86948e7943"
 	common.BuildPatchSeriesSHA256 = digest
 	common.BuildPatchedTreeSHA256 = digest
 	common.BuildRecipeSHA256 = digest

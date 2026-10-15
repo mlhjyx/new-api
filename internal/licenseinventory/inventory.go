@@ -22,8 +22,8 @@ const (
 	upstreamNoticeSHA256     = "528067fcdf4f9d7e3fdb489d02cbdd36a0efa63fc2eb1686340612c26beb9f33"
 	forkNoticeMarker         = "\n==== GrowthOS Fork Modification Notice ===="
 	runtimeEpayModule        = "github.com/Calcium-Ion/go-epay"
-	runtimeEpayVersion       = "v0.0.5-0.20260612155053-774330a93901"
-	runtimeEpayModuleSum     = "h1:RsR3YZPHrMvyiPAOIfxIPNEvrIIk1vBZNu/3LmxC/4Q="
+	runtimeEpayVersion       = "v0.0.5"
+	runtimeEpayModuleSum     = "h1:TgIx44c/bhdFqso4kbmDzZFzgyDJLma5hMDNA6sOXbo="
 	runtimeEpayLicenseSHA256 = "86f028deb5895d8994571a0393face710851c29bb938e9b23fe7a9828efd99a8"
 )
 
@@ -31,24 +31,24 @@ var bunPackagePattern = regexp.MustCompile(`(?m)^\s{4}"([^"]+)": \["([^"]+)"[^\n
 var bunWorkspacePackagePattern = regexp.MustCompile(`(?m)^\s{4}"([^"]+)": \["([^"]+@workspace:[^"]+)"\],?$`)
 
 var reviewedLicenseExpressions = map[string]struct{}{
-	"0BSD":                    {},
-	"AGPL-3.0-only":           {},
-	"Apache-2.0":              {},
-	"Apache-2.0 OR MIT":       {},
-	"BSD-2-Clause":            {},
-	"BSD-3-Clause":            {},
-	"ISC":                     {},
-	"MIT":                     {},
-	"MPL-2.0":                 {},
-	"(MPL-2.0 OR Apache-2.0)": {},
-	"OFL-1.1":                 {},
-	"Unlicense":               {},
+	"0BSD":                      {},
+	"AGPL-3.0-only":             {},
+	"Apache-2.0":                {},
+	"Apache-2.0 OR MIT":         {},
+	"BSD-2-Clause":              {},
+	"BSD-3-Clause":              {},
+	"(BSD-3-Clause OR GPL-2.0)": {},
+	"ISC":                       {},
+	"MIT":                       {},
+	"MPL-2.0":                   {},
+	"(MPL-2.0 OR Apache-2.0)":   {},
+	"OFL-1.1":                   {},
+	"Unlicense":                 {},
 }
 
 type Report struct {
 	GoDirect                 int
-	DefaultWebDirect         int
-	ClassicWebDirect         int
+	WebDirect                int
 	ElectronDirect           int
 	ReviewStatus             string
 	UnresolvedPackages       int
@@ -157,8 +157,7 @@ func VerifyRepository(repoDir string, allowHold bool) (Report, error) {
 	}
 	return Report{
 		GoDirect:                 counts["backend"],
-		DefaultWebDirect:         counts["web/default"],
-		ClassicWebDirect:         counts["web/classic"],
+		WebDirect:                counts["web"],
 		ElectronDirect:           counts["electron"],
 		ReviewStatus:             review.Status,
 		UnresolvedPackages:       len(review.Unresolved),
@@ -257,15 +256,14 @@ func expectedDirectDependencies(repoDir string) (map[string]dependency, map[stri
 		return nil, nil, nil, err
 	}
 	bunPackages := parseBunPackages(bunLock)
-	for _, area := range []string{"default", "classic"} {
-		items, err := parseWebPackage(filepath.Join(repoDir, "web", area, "package.json"), area, bunPackages)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		for _, item := range items {
-			result[dependencyKey(item)] = item
-			counts[item.Area]++
-		}
+	// Upstream v1.0.0-rc.44 ships a single web app in web/.
+	items, err := parseWebPackage(repoDir, filepath.Join(repoDir, "web", "package.json"), bunPackages)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for _, item := range items {
+		result[dependencyKey(item)] = item
+		counts[item.Area]++
 	}
 
 	electron, err := parseElectron(filepath.Join(repoDir, "electron", "package.json"), filepath.Join(repoDir, "electron", "package-lock.json"))
@@ -318,7 +316,7 @@ type packageManifest struct {
 	DevDependencies map[string]string `json:"devDependencies"`
 }
 
-func parseWebPackage(path string, workspace string, locked map[string]dependency) ([]dependency, error) {
+func parseWebPackage(repoDir string, path string, locked map[string]dependency) ([]dependency, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -339,15 +337,15 @@ func parseWebPackage(path string, workspace string, locked map[string]dependency
 				lockedItem, ok = locked[name]
 			}
 			if !ok || lockedItem.Name != name || lockedItem.Version == "" {
-				return nil, fmt.Errorf("web/%s direct dependency %s has no exact Bun lock entry", workspace, name)
+				return nil, fmt.Errorf("web direct dependency %s has no exact Bun lock entry", name)
 			}
 			if scoped.items[name] == "workspace:*" {
-				lockedItem, err = resolveLobeUIWorkspaceDependency(path, name, lockedItem)
+				lockedItem, err = resolveLobeUIWorkspaceDependency(repoDir, name, lockedItem)
 				if err != nil {
 					return nil, err
 				}
 			}
-			lockedItem.Area = "web/" + workspace
+			lockedItem.Area = "web"
 			lockedItem.Scope = scoped.name
 			if scoped.items[name] == "workspace:*" {
 				lockedItem.Ecosystem = "local"
@@ -642,13 +640,13 @@ func validateDependencyResolutions(resolutions []dependencyResolution, adapterSH
 			Ecosystem:          "Go",
 			Name:               "github.com/Calcium-Ion/go-epay",
 			PreviousVersion:    "v0.0.4",
-			ResolvedVersion:    "v0.0.5-0.20260612155053-774330a93901",
-			ArtifactIntegrity:  "h1:RsR3YZPHrMvyiPAOIfxIPNEvrIIk1vBZNu/3LmxC/4Q=",
+			ResolvedVersion:    "v0.0.5",
+			ArtifactIntegrity:  "h1:TgIx44c/bhdFqso4kbmDzZFzgyDJLma5hMDNA6sOXbo=",
 			LicenseExpression:  "MIT",
 			LicenseFileSHA256:  "86f028deb5895d8994571a0393face710851c29bb938e9b23fe7a9828efd99a8",
 			BundleReachability: "runtime-linked",
 			Decision:           "UPGRADED_TO_EXACT_LICENSED_COMMIT",
-			EvidenceURI:        "https://github.com/Calcium-Ion/go-epay/blob/774330a939012a2baab5776e890456d5f15d586e/LICENSE",
+			EvidenceURI:        "https://github.com/Calcium-Ion/go-epay/blob/b6694eb473b09a94decd8ee71f9946156fda5e17/LICENSE",
 		},
 		"@giscus/react": {
 			Ecosystem:          "npm",
@@ -664,18 +662,18 @@ func validateDependencyResolutions(resolutions []dependencyResolution, adapterSH
 		"@splinetool/runtime": {
 			Ecosystem:          "npm",
 			Name:               "@splinetool/runtime",
-			PreviousVersion:    "0.9.526",
+			PreviousVersion:    "1.12.98",
 			ResolvedVersion:    "NOT_PRESENT",
-			ArtifactIntegrity:  "sha512-qznHbXA5aKwDbCgESAothCNm1IeEZcmNWG145p5aXj4w5uoqR1TZ9qkTHTKLTsUbHeitCwdhzmRqan1kxboLgQ==",
+			ArtifactIntegrity:  "sha512-UWZH/+4XtNgMMgmDiWhZS55WOwUDGuTj4uH6fiZV6Jol3d3v3z1RRBObspx8GMio0HajOYGg7FJ8TZdyBdpW4A==",
 			LicenseExpression:  "NOASSERTION",
 			BundleReachability: "absent-from-lock-install-and-frozen-bundles",
 			Decision:           "REMOVED_BY_PRIVATE_LOCAL_ADAPTER",
-			EvidenceURI:        "https://registry.npmjs.org/@splinetool/runtime/0.9.526",
+			EvidenceURI:        "https://registry.npmjs.org/@splinetool/runtime/1.12.98",
 		},
 		"@lobehub/ui": {
 			Ecosystem:          "local",
 			Name:               "@lobehub/ui",
-			PreviousVersion:    "5.15.6",
+			PreviousVersion:    "5.22.3",
 			ResolvedVersion:    "workspace:shared/lobe-ui-adapter@5.0.0",
 			ArtifactIntegrity:  "sha256:" + adapterSHA256,
 			LicenseExpression:  "AGPL-3.0-only",

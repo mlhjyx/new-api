@@ -26,7 +26,7 @@ jobs:
     env:
       IMAGE_REPOSITORY: ghcr.io/mlhjyx/new-api
       RELEASE_BRANCH: production-parity/settlement-readback-v1
-      PINNED_BASE: bde9b2f44887d34ec54799ae191d50f97914359e
+      PINNED_BASE: 633b4c5b190dc1af99a2814391354d86948e7943
     steps:
       - name: Check out requested commit
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

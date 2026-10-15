@@ -17,22 +17,23 @@ import (
 )
 
 const (
-	testBaseArchiveSHA = "3f532d1b4f48153277342e98c54b06665b0c472118b0f032ddcc70233c288331"
-	testBaseCommit     = "bde9b2f44887d34ec54799ae191d50f97914359e"
+	testBaseArchiveSHA = "79730bae9aacbc671997551b0fa16cfda892575f71e31c804e2d6ae8b211a77c"
+	testBaseCommit     = "633b4c5b190dc1af99a2814391354d86948e7943"
 )
 
 func TestPinnedUpstreamBaseMatchesApprovedGitObject(t *testing.T) {
 	repo := filepath.Clean(filepath.Join("..", ".."))
+	skipShallowCheckoutWithoutPinnedBase(t, repo)
 
 	manifest, err := VerifyPinnedUpstream(context.Background(), repo)
 	require.NoError(t, err)
 	assert.Equal(t, "https://github.com/QuantumNous/new-api", manifest.CanonicalURL)
 	assert.Equal(t, testBaseCommit, manifest.Commit)
-	assert.Equal(t, "8d25730d7f58a83778ef23b3a8ccd255d2d91701", manifest.GitTree)
+	assert.Equal(t, "49914c98d34046b597d1dfa2ab0f0e022fc4642b", manifest.GitTree)
 	assert.Equal(t, testBaseArchiveSHA, manifest.SourceArchiveSHA256)
 	assert.Equal(t, "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef", manifest.LicenseSHA256)
 	assert.Equal(t, "528067fcdf4f9d7e3fdb489d02cbdd36a0efa63fc2eb1686340612c26beb9f33", manifest.NoticeSHA256)
-	assert.Equal(t, "33d93b4c0522a727be82f1a0cd12b09d8b7d10ed8117529dc373f4d7e2f37aa3", manifest.ThirdPartySHA256)
+	assert.Equal(t, "9fbf84bd75bdb45d8d430c32ddf02816bb8e6828b49c66d92f4b047b0f74361b", manifest.ThirdPartySHA256)
 }
 
 func TestGenerateSourceProvenanceBindsCleanExactRevision(t *testing.T) {
@@ -237,7 +238,7 @@ func TestClosedProvenanceAndReceiptRejectUnknownOrMissingFields(t *testing.T) {
 		return err
 	}())
 
-	duplicate := []byte(`{"schema_version":"new-api-upstream-base/v1","canonical_url":"https://github.com/QuantumNous/new-api","canonical_url":"https://github.com/QuantumNous/new-api","commit":"bde9b2f44887d34ec54799ae191d50f97914359e","git_tree":"8d25730d7f58a83778ef23b3a8ccd255d2d91701","tree_archive_sha256":"07923f60654b9eadda476ea4f269524273b0edeb5287b50c602c4e6921afb6d4","source_archive_sha256":"3f532d1b4f48153277342e98c54b06665b0c472118b0f032ddcc70233c288331","license_sha256":"8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef","notice_sha256":"528067fcdf4f9d7e3fdb489d02cbdd36a0efa63fc2eb1686340612c26beb9f33","third_party_sha256":"33d93b4c0522a727be82f1a0cd12b09d8b7d10ed8117529dc373f4d7e2f37aa3"}`)
+	duplicate := []byte(`{"schema_version":"new-api-upstream-base/v1","canonical_url":"https://github.com/QuantumNous/new-api","canonical_url":"https://github.com/QuantumNous/new-api","commit":"633b4c5b190dc1af99a2814391354d86948e7943","git_tree":"49914c98d34046b597d1dfa2ab0f0e022fc4642b","tree_archive_sha256":"4887a0d45023fc349fff7dacb52effe25a21d2578696744504e27799cfa293ad","source_archive_sha256":"79730bae9aacbc671997551b0fa16cfda892575f71e31c804e2d6ae8b211a77c","license_sha256":"8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef","notice_sha256":"528067fcdf4f9d7e3fdb489d02cbdd36a0efa63fc2eb1686340612c26beb9f33","third_party_sha256":"9fbf84bd75bdb45d8d430c32ddf02816bb8e6828b49c66d92f4b047b0f74361b"}`)
 	_, err := DecodeUpstreamBase(duplicate)
 	assert.ErrorContains(t, err, "duplicate")
 }
@@ -391,9 +392,11 @@ func (fixture *gitFixture) writeRequiredBuildFiles(t *testing.T) {
 	fixture.write(t, ".github/workflows/growthos-new-api-release.yml", "name: release recipe\n")
 	fixture.write(t, "go.mod", "module example.invalid/release-fixture\n\ngo 1.25.1\n")
 	fixture.write(t, "go.sum", "")
+	fixture.write(t, "relaykit/go.mod", "module example.invalid/release-fixture/relaykit\n\ngo 1.25.1\n")
+	fixture.write(t, "relaykit/go.sum", "")
+	fixture.write(t, "tokenkit/go.mod", "module example.invalid/release-fixture/tokenkit\n\ngo 1.25.1\n")
+	fixture.write(t, "tokenkit/go.sum", "")
 	fixture.write(t, "web/package.json", "{}\n")
-	fixture.write(t, "web/default/package.json", "{}\n")
-	fixture.write(t, "web/classic/package.json", "{}\n")
 	fixture.write(t, "web/shared/lobe-ui-adapter/package.json", "{}\n")
 	fixture.write(t, "web/bun.lock", "{}\n")
 }
@@ -488,4 +491,20 @@ func sha256File(t *testing.T, path string) string {
 	require.NoError(t, err)
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])
+}
+
+// skipShallowCheckoutWithoutPinnedBase lets upstream's shallow CI checkout
+// (actions/checkout fetch-depth: 1 in ci.yml) run the suite. The fork release
+// workflows check out full history, where the pinned base must resolve, so
+// this never skips there and the gate stays fail-closed.
+func skipShallowCheckoutWithoutPinnedBase(t *testing.T, repo string) {
+	t.Helper()
+	shallow, err := exec.Command("git", "-C", repo, "rev-parse", "--is-shallow-repository").Output()
+	if err != nil || strings.TrimSpace(string(shallow)) != "true" {
+		return
+	}
+	if exec.Command("git", "-C", repo, "cat-file", "-e", PinnedUpstreamCommit+"^{commit}").Run() == nil {
+		return
+	}
+	t.Skip("shallow checkout lacks the pinned upstream base; the fork release workflow verifies it with full history")
 }

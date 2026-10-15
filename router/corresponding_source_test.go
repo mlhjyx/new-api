@@ -26,7 +26,7 @@ func TestCorrespondingSourceRouteRequiresNoAuthenticationOrDatabase(t *testing.T
 	common.BuildReleaseVersion = "production-parity-" + revision
 	common.BuildReleaseRevision = revision
 	common.BuildReleaseGitTree = strings.Repeat("c", 40)
-	common.BuildUpstreamRevision = "bde9b2f44887d34ec54799ae191d50f97914359e"
+	common.BuildUpstreamRevision = "633b4c5b190dc1af99a2814391354d86948e7943"
 	common.BuildPatchSeriesSHA256, common.BuildPatchedTreeSHA256 = digest, digest
 	common.BuildRecipeSHA256, common.BuildModuleGraphSHA256 = digest, digest
 	common.BuildCorrespondingSourceURI = "https://github.com/mlhjyx/new-api/tree/" + revision

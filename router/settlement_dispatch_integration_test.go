@@ -240,6 +240,58 @@ func TestSettlementDispatchRejectsUnsupportedAndAmbiguousRouterPathsWithoutRedir
 	assert.Zero(t, bindings)
 }
 
+// Upstream v1.0.0-rc.44 added relay routes that did not exist at the fork's
+// previous base: the Responses WebSocket upgrade on GET /v1/responses and the
+// compact and alpha search endpoints. A bound dispatch token must never reach
+// them, with or without settlement headers, and must never create a binding.
+func TestSettlementBoundTokenCannotReachUpstreamRC44RelayRoutes(t *testing.T) {
+	var physicalWires atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		physicalWires.Add(1)
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	db, engine := newSettlementDispatchIntegrationHarness(t, "rc44-routes", upstream.URL, constant.ChannelTypeOpenAI, "")
+	for index, target := range []struct {
+		method      string
+		path        string
+		withHeaders bool
+		websocket   bool
+	}{
+		{method: http.MethodGet, path: "/v1/responses", withHeaders: true, websocket: true},
+		{method: http.MethodGet, path: "/v1/responses", websocket: true},
+		{method: http.MethodPost, path: "/v1/responses/compact", withHeaders: true},
+		{method: http.MethodPost, path: "/v1/alpha/search", withHeaders: true},
+	} {
+		requestID, nonce := "", ""
+		if target.withHeaders {
+			requestID = settlementDispatchOpaque(byte(index + 150))
+			nonce = settlementDispatchOpaque(byte(index + 170))
+		}
+		request := httptest.NewRequest(target.method, target.path, bytes.NewBufferString(`{"model":"gpt-4o-mini","input":"hello"}`))
+		request.Header.Set("Authorization", "Bearer sk-settlementdispatch")
+		request.Header.Set("Content-Type", "application/json")
+		if target.websocket {
+			request.Header.Set("Connection", "Upgrade")
+			request.Header.Set("Upgrade", "websocket")
+			request.Header.Set("Sec-WebSocket-Version", "13")
+			request.Header.Set("Sec-WebSocket-Key", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x5a}, 16)))
+		}
+		if requestID != "" {
+			request.Header.Set(common.SettlementReadbackRequestIdHeader, requestID)
+			request.Header.Set(common.SettlementReadbackNonceHeader, nonce)
+		}
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		assert.Equal(t, http.StatusForbidden, response.Code, "%s %s headers=%t", target.method, target.path, target.withHeaders)
+	}
+	assert.Zero(t, physicalWires.Load())
+	var bindings int64
+	require.NoError(t, db.Model(&model.SettlementReadbackBinding{}).Count(&bindings).Error)
+	assert.Zero(t, bindings)
+}
+
 func TestSettlementDispatchRejectsAdaptersOutsideCommonCASWithoutFallbackWire(t *testing.T) {
 	tests := []struct {
 		name                 string
@@ -400,10 +452,15 @@ func TestSettlementDispatchStreamUncertaintyLeavesOneWireAndNoReceipt(t *testing
 	tests := []struct {
 		name string
 		mode string
+		// wantErrorCode pins the fork's skip-retry settlement error for stream
+		// failures that unbound requests would retry before their first byte.
+		wantErrorCode string
 	}{
 		{name: "client disconnect", mode: "client_disconnect"},
 		{name: "upstream interruption before terminal event", mode: "upstream_interruption"},
 		{name: "post-wire log persistence failure", mode: "log_persistence_failure"},
+		{name: "upstream eof before the first chunk", mode: "upstream_eof_before_first_chunk", wantErrorCode: "settlement_stream_incomplete"},
+		{name: "upstream error event before the first chunk", mode: "upstream_error_event_before_first_chunk", wantErrorCode: "settlement_stream_incomplete"},
 	}
 
 	for index, testCase := range tests {
@@ -427,6 +484,9 @@ func TestSettlementDispatchStreamUncertaintyLeavesOneWireAndNoReceipt(t *testing
 					}
 				case "upstream_interruption":
 					_, _ = writer.Write([]byte(settlementChatStreamChunk("chatcmpl-truncated")))
+				case "upstream_eof_before_first_chunk":
+				case "upstream_error_event_before_first_chunk":
+					_, _ = writer.Write([]byte(`data: {"error":{"message":"upstream overloaded","type":"server_error","code":"upstream_timeout"}}` + "\n\n"))
 				case "log_persistence_failure":
 					_, _ = writer.Write([]byte(settlementChatStreamBody("chatcmpl-log-failure")))
 				}
@@ -468,6 +528,9 @@ func TestSettlementDispatchStreamUncertaintyLeavesOneWireAndNoReceipt(t *testing
 				nonce,
 			)
 			assert.Contains(t, []int{http.StatusOK, http.StatusInternalServerError}, response.Code)
+			if testCase.wantErrorCode != "" {
+				assert.Contains(t, response.Body.String(), testCase.wantErrorCode)
+			}
 			assert.EqualValues(t, 1, primaryWires.Load())
 			assert.Zero(t, fallbackWires.Load())
 
@@ -769,7 +832,10 @@ func newSettlementDispatchIntegrationHarness(t *testing.T, name string, upstream
 
 	engine := gin.New()
 	engine.Use(middleware.RequestId())
+	// Mirror SetRouter: since upstream v1.0.0-rc.27 POST /v1/responses is served
+	// by the host protocol router, not by SetRelayRouter.
 	SetRelayRouter(engine)
+	SetTaskPluginProtocolRouter(engine)
 	SetVideoRouter(engine)
 	return db, engine
 }

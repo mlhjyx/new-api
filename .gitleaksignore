@@ -1,17 +1,23 @@
 # Reviewed source examples and non-secret protocol constants. Fingerprints are
 # intentionally line-bound: moving or changing a value forces a new review.
-common/str.go:gcp-api-key:261
-Dockerfile:generic-api-key:153
-controller/token_test.go:generic-api-key:394
-controller/token_test.go:generic-api-key:422
-controller/token_test.go:generic-api-key:449
-controller/token_test.go:generic-api-key:474
-middleware/auth.go:generic-api-key:149
-relay/channel/task/jimeng/adaptor.go:generic-api-key:226
-relay/channel/task/jimeng/adaptor.go:generic-api-key:410
-relay/channel/task/jimeng/adaptor.go:generic-api-key:412
-relay/channel/vertex/service_account.go:private-key:68
+# Re-reviewed for the upstream v1.0.0-rc.44 sync: the jimeng model keys moved
+# from the Go adaptor into plugins/tasks/jimeng/plugin.js, and the masked
+# example key moved from common/str.go into relaykit.
+Dockerfile:generic-api-key:142
+controller/token_test.go:generic-api-key:440
+controller/token_test.go:generic-api-key:468
+controller/token_test.go:generic-api-key:495
+controller/token_test.go:generic-api-key:520
+middleware/auth.go:generic-api-key:360
+plugins/tasks/jimeng/plugin.js:generic-api-key:206
+plugins/tasks/jimeng/plugin.js:generic-api-key:208
+plugins/tasks/jimeng/plugin.js:generic-api-key:217
+relay/channel/vertex/service_account.go:private-key:67
+relay/helper/reasoning_suffix_test.go:generic-api-key:78
+relaykit/relayconvert/kitutil/mask.go:gcp-api-key:127
 # VChart minifies `nx.gaugePointer=` immediately after the literal `sankey`;
 # the generic-key rule treats that JavaScript property assignment as a key.
-web/default/dist/static/js/async/6956.756db2b9a3.js:generic-api-key:2
-web/classic/dist/static/js/async/3167.7108ad7909.js:generic-api-key:2
+web/dist/static/js/async/39243.288a1dc690.js:generic-api-key:2
+# node-forge's minified PKCS#12 OID table and TLS handshake method names
+# (`pbeWithSHAAnd3-KeyTripleDES-CBC`, `handleClientKeyExchange`).
+web/dist/static/js/async/34369.c570de6c15.js:generic-api-key:1
