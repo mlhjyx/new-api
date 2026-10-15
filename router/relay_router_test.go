@@ -108,6 +108,9 @@ func setupRelayRouterTestDB(t *testing.T) {
 	require.NoError(t, model.InitDB())
 	model.LOG_DB = model.DB
 	require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.Token{}, &model.Ability{}))
+	// GrowthOS fork: TokenAuth consults settlement readback enrollment and
+	// fails closed when its tables are missing.
+	require.NoError(t, model.EnsureSettlementReadbackSharedSchema(model.DB))
 
 	t.Cleanup(func() {
 		if sqlDB, err := model.DB.DB(); err == nil {

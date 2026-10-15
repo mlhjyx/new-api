@@ -29,6 +29,9 @@ func TestGetOpenAIVideoRouteRendersJimengTask(t *testing.T) {
 	require.NoError(t, model.InitDB())
 	database := model.DB
 	require.NoError(t, database.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Task{}))
+	// GrowthOS fork: TokenAuth consults settlement readback enrollment and
+	// fails closed when its tables are missing.
+	require.NoError(t, model.EnsureSettlementReadbackSharedSchema(database))
 	t.Cleanup(func() {
 		sqlDB, closeErr := database.DB()
 		require.NoError(t, closeErr)
