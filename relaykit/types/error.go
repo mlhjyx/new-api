@@ -81,6 +81,11 @@ const (
 	ErrorCodeModelNotFound          ErrorCode = "model_not_found"
 	ErrorCodePromptBlocked          ErrorCode = "prompt_blocked"
 
+	// ErrorCodeUpstreamStreamAbortedBeforeFirstByte marks an upstream stream
+	// that failed before any response byte reached the client, so the relay
+	// retry loop can still try again.
+	ErrorCodeUpstreamStreamAbortedBeforeFirstByte ErrorCode = "upstream_stream_aborted_before_first_byte"
+
 	// sql error
 	ErrorCodeQueryDataError  ErrorCode = "query_data_error"
 	ErrorCodeUpdateDataError ErrorCode = "update_data_error"

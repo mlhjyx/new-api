@@ -121,6 +121,8 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var secondLastStreamData string // 保留倒数第二个stream data；部分兼容网关把完整usage放在倒数第二个事件
 	seenStreamToolCalls := make(map[string]struct{})
 	var streamFunctionCallNames []string
+	var receivedChunks int
+	var upstreamErrorEvent *upstreamStreamErrorEvent
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if lastStreamData != "" {
@@ -130,6 +132,12 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 		}
 		if len(data) > 0 {
+			receivedChunks++
+			if upstreamErrorEvent == nil {
+				if event, ok := parseUpstreamStreamErrorEvent(data); ok {
+					upstreamErrorEvent = &event
+				}
+			}
 			if lastStreamData != "" {
 				secondLastStreamData = lastStreamData
 			}
@@ -144,6 +152,10 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	})
 
 	info.StreamStatus.RequireTerminal()
+
+	if streamErr := checkUpstreamStreamEnd(c, info, resp, lastStreamData, receivedChunks, upstreamErrorEvent); streamErr != nil {
+		return nil, streamErr
+	}
 
 	// 处理最后的响应
 	shouldSendLastResp := true

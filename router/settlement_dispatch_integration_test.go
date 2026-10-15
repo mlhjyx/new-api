@@ -452,10 +452,15 @@ func TestSettlementDispatchStreamUncertaintyLeavesOneWireAndNoReceipt(t *testing
 	tests := []struct {
 		name string
 		mode string
+		// wantErrorCode pins the fork's skip-retry settlement error for stream
+		// failures that unbound requests would retry before their first byte.
+		wantErrorCode string
 	}{
 		{name: "client disconnect", mode: "client_disconnect"},
 		{name: "upstream interruption before terminal event", mode: "upstream_interruption"},
 		{name: "post-wire log persistence failure", mode: "log_persistence_failure"},
+		{name: "upstream eof before the first chunk", mode: "upstream_eof_before_first_chunk", wantErrorCode: "settlement_stream_incomplete"},
+		{name: "upstream error event before the first chunk", mode: "upstream_error_event_before_first_chunk", wantErrorCode: "settlement_stream_incomplete"},
 	}
 
 	for index, testCase := range tests {
@@ -479,6 +484,9 @@ func TestSettlementDispatchStreamUncertaintyLeavesOneWireAndNoReceipt(t *testing
 					}
 				case "upstream_interruption":
 					_, _ = writer.Write([]byte(settlementChatStreamChunk("chatcmpl-truncated")))
+				case "upstream_eof_before_first_chunk":
+				case "upstream_error_event_before_first_chunk":
+					_, _ = writer.Write([]byte(`data: {"error":{"message":"upstream overloaded","type":"server_error","code":"upstream_timeout"}}` + "\n\n"))
 				case "log_persistence_failure":
 					_, _ = writer.Write([]byte(settlementChatStreamBody("chatcmpl-log-failure")))
 				}
@@ -520,6 +528,9 @@ func TestSettlementDispatchStreamUncertaintyLeavesOneWireAndNoReceipt(t *testing
 				nonce,
 			)
 			assert.Contains(t, []int{http.StatusOK, http.StatusInternalServerError}, response.Code)
+			if testCase.wantErrorCode != "" {
+				assert.Contains(t, response.Body.String(), testCase.wantErrorCode)
+			}
 			assert.EqualValues(t, 1, primaryWires.Load())
 			assert.Zero(t, fallbackWires.Load())
 
