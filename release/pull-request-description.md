@@ -27,6 +27,7 @@ The final PR must not check the upstream template's human-review boxes until a
 named human has actually performed those checks. The engineering license review
 is now `APPROVED`, but this draft still does not authorize an OCI or source
 release and is not legal advice.
-The pinned Go 1.26.1 vet run also retains an exact, fail-closed baseline for 17
-pre-existing upstream findings; any addition, removal or line drift requires a
-separate review of `release/go-vet-baseline.txt`.
+The pinned Go 1.26.1 vet run keeps an exact, fail-closed baseline. Since the
+upstream v1.0.0-rc.44 sync the baseline is empty and `go vet ./...` must pass
+outright; any new finding requires a separate review of
+`release/go-vet-baseline.txt`.

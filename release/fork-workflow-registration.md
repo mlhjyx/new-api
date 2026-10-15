@@ -8,12 +8,15 @@ has already been changed. The parent operator owns every command and readback.
 ## Fixed repository and branch
 
 - Fork repository: `mlhjyx/new-api`.
-- Approved upstream base: `bde9b2f44887d34ec54799ae191d50f97914359e`.
+- Approved upstream base: `633b4c5b190dc1af99a2814391354d86948e7943`
+  (upstream tag `v1.0.0-rc.44`, recorded in `release/upstream-base.json`).
 - Release branch: `production-parity/settlement-readback-v1`.
-- The release branch must be created from that exact base and protected before
-  the Phase A-E pull request is merged.
-- Never merge, rebase, or copy the 163 unreviewed upstream commits from the
-  fork's historical `main` merely to register a workflow.
+- The release branch was created from the original exact base `bde9b2f4` and
+  moves to a new upstream base only through a reviewed pull request that merges
+  an upstream release tag with a merge commit and updates every pinned identity
+  in the same change.
+- Never merge, rebase, or copy unreviewed upstream commits from the fork's
+  `main` merely to register a workflow.
 
 ## Why default-branch registration is required
 

@@ -71,7 +71,7 @@ RUN set -eu; \
     test "${#RELEASE_REVISION}" -eq 40; \
     test "${#RELEASE_GIT_TREE}" -eq 40; \
     test "${NEW_API_VERSION}" = "production-parity-${RELEASE_REVISION}"; \
-    test "${UPSTREAM_REVISION}" = "bde9b2f44887d34ec54799ae191d50f97914359e"; \
+    test "${UPSTREAM_REVISION}" = "633b4c5b190dc1af99a2814391354d86948e7943"; \
     test "${CORRESPONDING_SOURCE_URI}" = "https://github.com/mlhjyx/new-api/tree/${RELEASE_REVISION}"; \
     test "${CORRESPONDING_SOURCE_ARCHIVE_URI}" = "https://github.com/mlhjyx/new-api/releases/download/source-${RELEASE_REVISION}/new-api-${RELEASE_REVISION}.tar.gz"; \
     test "${LICENSE_SHA256}" = "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef"; \
@@ -139,9 +139,9 @@ LABEL org.opencontainers.image.title="new-api" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
       io.growthos.new-api.upstream.source="https://github.com/QuantumNous/new-api" \
       io.growthos.new-api.upstream.revision="${UPSTREAM_REVISION}" \
-      io.growthos.new-api.upstream.git-tree="8d25730d7f58a83778ef23b3a8ccd255d2d91701" \
-      io.growthos.new-api.upstream.tree-sha256="07923f60654b9eadda476ea4f269524273b0edeb5287b50c602c4e6921afb6d4" \
-      io.growthos.new-api.upstream.source-archive-sha256="3f532d1b4f48153277342e98c54b06665b0c472118b0f032ddcc70233c288331" \
+      io.growthos.new-api.upstream.git-tree="49914c98d34046b597d1dfa2ab0f0e022fc4642b" \
+      io.growthos.new-api.upstream.tree-sha256="4887a0d45023fc349fff7dacb52effe25a21d2578696744504e27799cfa293ad" \
+      io.growthos.new-api.upstream.source-archive-sha256="79730bae9aacbc671997551b0fa16cfda892575f71e31c804e2d6ae8b211a77c" \
       io.growthos.new-api.fork.git-tree="${RELEASE_GIT_TREE}" \
       io.growthos.new-api.patch-series-sha256="${PATCH_SERIES_SHA256}" \
       io.growthos.new-api.patched-tree-sha256="${PATCHED_TREE_SHA256}" \

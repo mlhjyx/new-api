@@ -48,13 +48,19 @@ func TestPolicyRejectsProtectedProjectIdentityDrift(t *testing.T) {
 		{name: "upstream README", path: "README.md", oldValue: "Built with ❤️ by QuantumNous", newValue: "Built by GrowthOS", expectedErr: "README"},
 		{name: "upstream PR template", path: ".github/PULL_REQUEST_TEMPLATE.md", oldValue: "# ⚠️ 提交说明 / PR Notice", newValue: "# Fork PR", expectedErr: "pull request template"},
 		{name: "AI disclosure", path: "release/pull-request-description.md", oldValue: "OpenAI Codex", newValue: "automated tooling", expectedErr: "AI assistance"},
-		{name: "secret allowlist", path: ".gitleaksignore", oldValue: "Dockerfile:generic-api-key:153", newValue: "Dockerfile:generic-api-key:*", expectedErr: "secret allowlist"},
-		{name: "vet baseline", path: "release/go-vet-baseline.txt", oldValue: "relay/channel/baidu/adaptor.go:30:2: unreachable code", newValue: "relay/channel/baidu/adaptor.go:*: unreachable code", expectedErr: "vet baseline"},
+		{name: "secret allowlist", path: ".gitleaksignore", oldValue: "Dockerfile:generic-api-key:142", newValue: "Dockerfile:generic-api-key:*", expectedErr: "secret allowlist"},
+		// The rc.44 baseline is empty (vet is clean); any added finding drifts.
+		{name: "vet baseline", path: "release/go-vet-baseline.txt", oldValue: "", newValue: "relay/channel/baidu/adaptor.go:30:2: unreachable code\n", expectedErr: "vet baseline"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			repo := copyReleasePolicyFixture(t)
-			replaceOnce(t, filepath.Join(repo, filepath.FromSlash(test.path)), test.oldValue, test.newValue)
+			path := filepath.Join(repo, filepath.FromSlash(test.path))
+			if test.oldValue == "" {
+				appendFixture(t, path, test.newValue)
+			} else {
+				replaceOnce(t, path, test.oldValue, test.newValue)
+			}
 
 			_, err := VerifyRepository(repo)
 
@@ -74,16 +80,17 @@ func TestForkPullRequestCIContainsNoPublishSupplyChainGates(t *testing.T) {
 	assert.Contains(t, content, "/api/corresponding-source/v1")
 	assert.Contains(t, content, "licenses/license-review.json")
 	assert.Contains(t, content, "go test ./internal/releaseprovenance ./internal/releasepolicy ./internal/licenseinventory ./cmd/release-provenance ./cmd/release-license")
-	assert.Contains(t, content, "--gitleaks-ignore-path .gitleaksignore web/default/dist")
-	assert.Contains(t, content, "--gitleaks-ignore-path .gitleaksignore web/classic/dist")
+	assert.Contains(t, content, "--gitleaks-ignore-path .gitleaksignore web/dist")
+	assert.NotContains(t, content, "web/default/dist")
+	assert.NotContains(t, content, "web/classic/dist")
 	assert.Contains(t, content, "bun test shared/lobe-ui-adapter/adapter.test.tsx")
 	assert.Contains(t, content, "test ! -e node_modules/@giscus/react")
 	assert.Contains(t, content, "test ! -e node_modules/@splinetool/runtime")
 	assert.Contains(t, content, "grep -RFl \"growthos-lobe-flex-adapter\"")
 	assert.Contains(t, content, "go test -race ./model ./controller ./router -run Settlement -count=1")
 	assert.NotContains(t, content, "go test -race ./model ./controller ./middleware ./router ./relay/channel ./service")
-	assert.Contains(t, content, "bun install --filter ./classic --frozen-lockfile")
-	assert.Contains(t, content, "git -C \"${GITHUB_WORKSPACE}\" archive --format=tar HEAD:web")
+	assert.Contains(t, content, "bun install --frozen-lockfile")
+	assert.Contains(t, content, "if [ -s release/go-vet-baseline.txt ]; then test \"${vet_status}\" -eq 1; else test \"${vet_status}\" -eq 0; fi")
 	assert.Contains(t, content, "containerd-snapshotter")
 	assert.Contains(t, content, "provenance: mode=max")
 	assert.Contains(t, content, "sbom: true")
@@ -345,10 +352,10 @@ func TestForkWorkflowRegistrationUsesOnlyTheExactForkAndReleaseBranch(t *testing
 
 	assert.Contains(t, content, "`mlhjyx/new-api`")
 	assert.Contains(t, content, "`production-parity/settlement-readback-v1`")
-	assert.Contains(t, content, "`bde9b2f44887d34ec54799ae191d50f97914359e`")
+	assert.Contains(t, content, "`633b4c5b190dc1af99a2814391354d86948e7943`")
 	assert.Contains(t, content, "--repo mlhjyx/new-api")
 	assert.Contains(t, content, "workflow must exist on the fork default branch")
-	assert.Contains(t, content, "163 unreviewed upstream commits")
+	assert.Contains(t, content, "Never merge, rebase, or copy unreviewed upstream commits")
 	assert.NotContains(t, content, "--repo QuantumNous/new-api")
 }
 
@@ -391,6 +398,13 @@ func replaceOnce(t *testing.T, path string, oldValue string, newValue string) {
 	require.Equal(t, 1, strings.Count(content, oldValue), "fixture mutation must be exact")
 	content = strings.Replace(content, oldValue, newValue, 1)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+}
+
+func appendFixture(t *testing.T, path string, value string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, append(data, value...), 0o644))
 }
 
 func swapOnce(t *testing.T, path string, first string, second string) {

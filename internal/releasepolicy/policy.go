@@ -19,10 +19,10 @@ const (
 	canonicalForkRepository     = "mlhjyx/new-api"
 	canonicalForkImage          = "ghcr.io/mlhjyx/new-api"
 	exactReleaseBranch          = "production-parity/settlement-readback-v1"
-	protectedReadmeSHA256       = "c5e9ae7fde68d582f1ebfdc191944e1e130443167c1253b94d658819ca53d418"
-	protectedPRTemplateSHA256   = "50a9790f8b37ecc3328c6cc4bf1ec6d5d8c251e1b13e839e4f12bfaca5ae6afb"
-	protectedGitleaksIgnoreSHA  = "ce9b9151dc515bc7abdfd40eb48e2d768fd222c776408cc067d4cbbc97ea0802"
-	protectedGoVetBaselineSHA   = "785654b4c2591a7194630adabdeebeb0260c7b7ce5a923ca4055e9e8052ecde4"
+	protectedReadmeSHA256       = "2a3cff54ee1b8ea01790c1b5949ca52901f2835a36241a926bea7124b16ca33b"
+	protectedPRTemplateSHA256   = "be4550d1ce1a56bd270909e509858f7515d78a71f03c802a965ceba111440ed0"
+	protectedGitleaksIgnoreSHA  = "cce1d50560c412f267655fbb421b18271ab345ebaac478b5e83a2ba35a2b37c1"
+	protectedGoVetBaselineSHA   = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	pinnedGitleaksImage         = "zricethezav/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9"
 )
 
@@ -178,10 +178,10 @@ func verifyForkWorkflowRegistration(repoDir string) error {
 	for _, required := range []string{
 		"`mlhjyx/new-api`",
 		"`production-parity/settlement-readback-v1`",
-		"`bde9b2f44887d34ec54799ae191d50f97914359e`",
+		"`633b4c5b190dc1af99a2814391354d86948e7943`",
 		"--repo mlhjyx/new-api",
 		"workflow must exist on the fork default branch",
-		"163 unreviewed upstream commits",
+		"Never merge, rebase, or copy unreviewed upstream commits",
 	} {
 		if !strings.Contains(content, required) {
 			return errors.New("fork workflow registration contract is incomplete")
@@ -242,8 +242,7 @@ func verifyForkPullRequestGates(content string) error {
 		"--workdir /repo",
 		"dir --no-banner --redact --exit-code 1",
 		"--gitleaks-ignore-path .gitleaksignore .",
-		"--gitleaks-ignore-path .gitleaksignore web/default/dist",
-		"--gitleaks-ignore-path .gitleaksignore web/classic/dist",
+		"--gitleaks-ignore-path .gitleaksignore web/dist",
 		"output-file: ${{ runner.temp }}/new-api-source.spdx.json",
 		"output-file: ${{ runner.temp }}/new-api-image.spdx.json",
 		"licenses/license-review.json",
@@ -258,9 +257,10 @@ func verifyForkPullRequestGates(content string) error {
 		"go vet ./... 2> \"${RUNNER_TEMP}/go-vet.raw.txt\"",
 		"LC_ALL=C sort -u release/go-vet-baseline.txt",
 		"diff -u \"${RUNNER_TEMP}/go-vet.expected.txt\" \"${RUNNER_TEMP}/go-vet.actual.txt\"",
+		"if [ -s release/go-vet-baseline.txt ]; then test \"${vet_status}\" -eq 1; else test \"${vet_status}\" -eq 0; fi",
 		"go test -race ./model ./controller ./router -run Settlement -count=1",
-		"bun install --filter ./classic --frozen-lockfile",
-		"git -C \"${GITHUB_WORKSPACE}\" archive --format=tar HEAD:web",
+		"bun install --frozen-lockfile",
+		"grep -RFl \"growthos-lobe-flex-adapter\" dist",
 		"containerd-snapshotter",
 	}
 	for _, value := range required {
@@ -388,8 +388,12 @@ func verifyProductionDockerfile(repoDir string) (string, string, error) {
 	if !strings.Contains(content, "CGO_ENABLED=0") || strings.Contains(content, "CGO_ENABLED=1") {
 		return "", "", errors.New("production binary must be CGO-disabled")
 	}
-	if strings.Count(content, "COPY web/shared/lobe-ui-adapter/package.json ./shared/lobe-ui-adapter/package.json") != 2 ||
-		strings.Count(content, "COPY web/shared/lobe-ui-adapter ./shared/lobe-ui-adapter") != 2 {
+	// Upstream v1.0.0-rc.44 builds one web app: the adapter manifest must be in
+	// place before the frozen install, and the full web tree (adapter sources
+	// included) is copied before the build.
+	adapterManifest := "COPY web/shared/lobe-ui-adapter/package.json ./shared/lobe-ui-adapter/package.json\nRUN bun install --frozen-lockfile\nCOPY ./web ./\n"
+	if strings.Count(content, "COPY web/shared/lobe-ui-adapter/package.json ./shared/lobe-ui-adapter/package.json") != 1 ||
+		strings.Count(content, adapterManifest) != 1 {
 		return "", "", errors.New("production frontend builds must bind the private Lobe UI adapter")
 	}
 	boundedDownload := "RUN --mount=type=cache,id=new-api-go-mod,target=/go/pkg/mod,sharing=locked \\\n    set -eu; \\\n    for attempt in 1 2 3"

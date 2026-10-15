@@ -75,12 +75,11 @@ func VerifyLobeUIAdapter(repoDir string) (AdapterEvidence, error) {
 	return AdapterEvidence{ArtifactSHA256: hex.EncodeToString(hash.Sum(nil)), Version: manifest.Version}, nil
 }
 
-func resolveLobeUIWorkspaceDependency(manifestPath string, name string, locked dependency) (dependency, error) {
+func resolveLobeUIWorkspaceDependency(repoDir string, name string, locked dependency) (dependency, error) {
 	if name != lobeUIAdapterDependency || locked.Name != lobeUIAdapterDependency || locked.Version != lobeUIAdapterLock {
 		return dependency{}, fmt.Errorf("web dependency %s has an unauthorized workspace implementation", name)
 	}
-	webRoot := filepath.Dir(filepath.Dir(manifestPath))
-	evidence, err := VerifyLobeUIAdapter(filepath.Dir(webRoot))
+	evidence, err := VerifyLobeUIAdapter(repoDir)
 	if err != nil {
 		return dependency{}, err
 	}

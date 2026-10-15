@@ -25,9 +25,11 @@ var buildRecipeFiles = []string{
 var moduleGraphFiles = []string{
 	"go.mod",
 	"go.sum",
+	"relaykit/go.mod",
+	"relaykit/go.sum",
+	"tokenkit/go.mod",
+	"tokenkit/go.sum",
 	"web/bun.lock",
-	"web/classic/package.json",
-	"web/default/package.json",
 	"web/package.json",
 	"web/shared/lobe-ui-adapter/package.json",
 }

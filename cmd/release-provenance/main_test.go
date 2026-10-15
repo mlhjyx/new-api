@@ -17,7 +17,7 @@ func TestRunVerifiesThePinnedUpstreamManifest(t *testing.T) {
 	exitCode := run([]string{"verify-upstream", "--repo", filepath.Clean(filepath.Join("..", ".."))}, &stdout, &stderr)
 
 	assert.Equal(t, 0, exitCode)
-	assert.Equal(t, "bde9b2f44887d34ec54799ae191d50f97914359e\n", stdout.String())
+	assert.Equal(t, "633b4c5b190dc1af99a2814391354d86948e7943\n", stdout.String())
 	assert.Empty(t, stderr.String())
 }
 
